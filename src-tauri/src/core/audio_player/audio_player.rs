@@ -396,9 +396,9 @@ impl AudioPlayer {
         }
 
         // ========== PHASE 2 : CONFIGURATION SORTIE ==========
-        let host: cpal::Host = cpal::default_host();
+        let host: &cpal::Host = crate::core::audio_player::output::device_lookup::host();
         let device: cpal::Device = crate::core::audio_player::output::device_lookup::choose(
-            &host,
+            host,
             selected_device_name.as_deref(),
         )?;
 
@@ -1180,9 +1180,9 @@ impl AudioPlayer {
         );
 
         // ─── 2. CPAL output device + config (mêmes choix que Symphonia path) ───
-        let host = cpal::default_host();
+        let host = crate::core::audio_player::output::device_lookup::host();
         let device: cpal::Device = crate::core::audio_player::output::device_lookup::choose(
-            &host,
+            host,
             selected_device_name.as_deref(),
         )?;
 

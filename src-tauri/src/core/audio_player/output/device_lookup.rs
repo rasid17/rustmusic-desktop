@@ -2,7 +2,20 @@
 //! sorties portent les noms du serveur son ; les anciens noms ALSA
 //! (« Carte, Pilote ») sont retrouvés par le nom de carte.
 
+use std::sync::LazyLock;
+
 use cpal::traits::{DeviceTrait, HostTrait};
+
+/// Hôte CPAL unique pour la durée de vie du processus. Chaque `default_host()`
+/// ouvre une connexion vers le serveur son et, sous PulseAudio, une partie ne
+/// se referme jamais : la liste des sorties s'allongeait d'une connexion à
+/// chaque appel. L'énumération reste fraîche — c'est le serveur qui répond,
+/// pas l'hôte.
+static HOST: LazyLock<cpal::Host> = LazyLock::new(cpal::default_host);
+
+pub fn host() -> &'static cpal::Host {
+    &HOST
+}
 
 /// Nom brut et nom affiché (avec le fabricant quand il est connu).
 fn names(device: &cpal::Device) -> Option<(String, String)> {
@@ -71,7 +84,7 @@ pub fn choose(host: &cpal::Host, name: Option<&str>) -> Result<cpal::Device, Str
 #[cfg(target_os = "macos")]
 pub fn pin_device(device: &cpal::Device) -> cpal::Device {
     let Ok(id) = device.id() else { return device.clone() };
-    cpal::default_host()
+    host()
         .output_devices()
         .ok()
         .and_then(|mut sorties| sorties.find(|d| d.id().is_ok_and(|i| i == id)))
@@ -91,11 +104,6 @@ pub fn sound_server_period(host: &cpal::Host, rate: u32) -> Option<u32> {
 
 /// Sortie retirée à PipeWire par notre lecture exclusive (elle reviendra après).
 #[cfg(target_os = "linux")]
-pub fn is_held(name: &str) -> bool {
-    held_card(name).is_some()
-}
-
-#[cfg(target_os = "linux")]
 fn held_card(name: &str) -> Option<u32> {
     use super::{device_reservation::card_index_from_hw_id, dop_alsa::resolve_hw_id, pipewire_profile};
     let card = card_index_from_hw_id(&resolve_hw_id(name)?)?;
@@ -110,9 +118,9 @@ pub fn reclaim_if_held(name: &str) -> Option<cpal::Device> {
     if !super::pipewire_profile::restore_now(card) {
         return None;
     }
-    let host = cpal::default_host();
+    let hote = host();
     for _ in 0..30 {
-        if let Some(device) = find(&host, name) {
+        if let Some(device) = find(hote, name) {
             log::info!("Sortie '{name}' rendue à PipeWire pour la lecture partagée");
             return Some(device);
         }

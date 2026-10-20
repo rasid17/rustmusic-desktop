@@ -166,8 +166,8 @@ fn recover(generation: u64, device_name: &str, config: &cpal::StreamConfig) {
             return;
         }
         // Le DAC peut mettre quelques secondes à réapparaître (câble, réinitialisation USB).
-        let host = cpal::default_host();
-        let target = match super::device_lookup::find(&host, device_name) {
+        let host = super::device_lookup::host();
+        let target = match super::device_lookup::find(host, device_name) {
             Some(device) => Some((device, device_name.to_string())),
             None if attempt > SAME_DEVICE_TRIES => host
                 .default_output_device()

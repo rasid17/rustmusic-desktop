@@ -330,7 +330,7 @@ fn display_name_matches(device: &cpal::Device, default_name: &str) -> bool {
 
 #[tauri::command]
 pub async fn get_output_devices() -> Result<Vec<AudioDeviceInfo>, String> {
-    let host: cpal::Host = cpal::default_host();
+    let host: &cpal::Host = crate::core::audio_player::output::device_lookup::host();
     #[cfg(target_os = "linux")]
     let hote_alsa = host.id() == cpal::HostId::Alsa;
     #[cfg(not(target_os = "linux"))]
@@ -385,12 +385,16 @@ pub async fn get_output_devices() -> Result<Vec<AudioDeviceInfo>, String> {
         }
     }
 
-    // Exclusif Linux : la carte est retirée à PipeWire le temps de la lecture. Sans
-    // elle, la liste ne montrait plus que « Dummy Output », qu'on finissait par choisir.
+    // Exclusif Linux : la carte retirée à PipeWire le temps de la lecture ne doit
+    // pas disparaître de la liste — on finirait par choisir « Dummy Output » sans
+    // le vouloir. Chaque sortie tuée est rendue sous son vrai nom ; la choisir
+    // rendra son profil à la carte avant de lire (device_lookup::reclaim_if_held).
     #[cfg(target_os = "linux")]
-    if let Some(nom) = enregistree.filter(|n| {
-        choisie.is_none() && crate::core::audio_player::output::device_lookup::is_held(n)
-    }) {
+    for nom in crate::core::audio_player::output::pipewire_profile::held_sinks() {
+        if out.iter().any(|d| d.name == nom) {
+            continue;
+        }
+        let selectionne = enregistree.as_deref() == Some(nom.as_str());
         out.push(AudioDeviceInfo {
             name: nom.clone(),
             display_name: nom,
@@ -405,7 +409,7 @@ pub async fn get_output_devices() -> Result<Vec<AudioDeviceInfo>, String> {
             max_buffer_frames: None,
             is_hires: false,
             bus: None,
-            is_selected: true,
+            is_selected: selectionne,
         });
     }
 

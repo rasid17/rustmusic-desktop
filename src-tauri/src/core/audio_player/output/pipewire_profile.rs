@@ -21,6 +21,9 @@ struct Hold {
     count: u32,
     /// `None` si la carte était déjà hors service ou inconnue de PipeWire.
     restore: Option<Restore>,
+    /// Sorties (« node.description ») que la carte exposait avant d'être tue :
+    /// la liste des périphériques les redonne pendant la durée de la prise.
+    sinks: Vec<String>,
     generation: u64,
 }
 
@@ -57,6 +60,7 @@ pub fn acquire(card: u32) -> Result<(), String> {
         return Ok(());
     }
 
+    let sinks = read_sink_names(card);
     let restore = match read_cards()?.into_iter().find(|c| c.0 == card).map(|c| c.1) {
         None => None,
         Some(found) if found.profile == PROFILE_OFF => None,
@@ -71,7 +75,7 @@ pub fn acquire(card: u32) -> Result<(), String> {
             Some(restore)
         }
     };
-    holds.insert(card, Hold { count: 1, restore, generation: next_generation() });
+    holds.insert(card, Hold { count: 1, restore, sinks, generation: next_generation() });
     Ok(())
 }
 
@@ -103,6 +107,16 @@ pub fn release(card: u32) {
 /// Carte hors service de notre fait : sa sortie a disparu de PipeWire.
 pub fn is_held(card: u32) -> bool {
     holds().get(&card).is_some_and(|h| h.restore.is_some())
+}
+
+/// Les sorties que les cartes prises en exclusif exposaient avant d'être
+/// tues. La liste des périphériques les redonne pendant la durée de la prise.
+pub fn held_sinks() -> Vec<String> {
+    holds()
+        .iter()
+        .filter(|(_, h)| h.restore.is_some())
+        .flat_map(|(_, h)| h.sinks.iter().cloned())
+        .collect()
 }
 
 /// Rend la carte sans attendre la fin du délai de grâce ; `false` si elle est encore prise.
@@ -168,6 +182,32 @@ fn read_cards() -> Result<Vec<(u32, Card)>, String> {
     let objects: Vec<Value> =
         serde_json::from_slice(&output.stdout).map_err(|e| format!("pw-dump illisible : {e}"))?;
     Ok(objects.iter().filter_map(parse_card).collect())
+}
+
+/// Les « node.description » des sorties Audio/Sink de cette carte, telles que
+/// PipeWire les expose à l'instant de l'appel (après la prise, il n'y en a plus).
+fn read_sink_names(card: u32) -> Vec<String> {
+    let Ok(output) = Command::new("pw-dump").output() else { return Vec::new() };
+    if !output.status.success() {
+        return Vec::new();
+    }
+    let Ok(objects) = serde_json::from_slice::<Vec<Value>>(&output.stdout) else { return Vec::new() };
+    objects.iter().filter_map(|o| parse_sink_name(o, card)).collect()
+}
+
+fn parse_sink_name(object: &Value, card: u32) -> Option<String> {
+    if object["type"] != "PipeWire:Interface:Node" {
+        return None;
+    }
+    let props = &object["info"]["props"];
+    if props["media.class"] != "Audio/Sink" {
+        return None;
+    }
+    let index = number(&props["api.alsa.pcm.card"]).or_else(|| number(&props["alsa.card"]))?;
+    if index != card {
+        return None;
+    }
+    props["node.description"].as_str().map(str::to_string)
 }
 
 fn parse_card(object: &Value) -> Option<(u32, Card)> {
@@ -321,6 +361,26 @@ mod tests {
         )
         .unwrap();
         assert_eq!(parse_alsa_sink(&hdmi, "HDMI 1"), Some((0, 3)));
+    }
+
+    #[test]
+    fn reads_sink_names_of_a_card() {
+        let sink: Value = serde_json::from_str(
+            r#"{ "id": 61, "type": "PipeWire:Interface:Node", "info": { "props": {
+                "media.class": "Audio/Sink", "node.description": "JM98MAX Analog Stereo",
+                "api.alsa.pcm.card": "2" } } }"#,
+        )
+        .unwrap();
+        assert_eq!(parse_sink_name(&sink, 2).as_deref(), Some("JM98MAX Analog Stereo"));
+        assert_eq!(parse_sink_name(&sink, 1), None);
+
+        // Une entrée (Audio/Source) n'est pas une sortie.
+        let src: Value = serde_json::from_str(
+            r#"{ "id": 62, "type": "PipeWire:Interface:Node", "info": { "props": {
+                "media.class": "Audio/Source", "node.description": "Micro", "api.alsa.pcm.card": 2 } } }"#,
+        )
+        .unwrap();
+        assert_eq!(parse_sink_name(&src, 2), None);
     }
 
     #[test]

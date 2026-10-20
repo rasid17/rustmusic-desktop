@@ -39,7 +39,7 @@ pub async fn mute() {
 
 #[tauri::command]
 pub async fn get_devices() -> Result<Vec<String>, String> {
-    let host: cpal::Host = cpal::default_host();
+    let host: &cpal::Host = crate::core::audio_player::output::device_lookup::host();
 
     let output_devices = host.output_devices()
         .map_err(|e| format!("Failed to get output devices: {}", e))?;
