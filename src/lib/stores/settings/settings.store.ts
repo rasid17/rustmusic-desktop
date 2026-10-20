@@ -63,6 +63,10 @@ export type AppSettings = {
   track_column_widths: string;
   // 'true' | 'false' — barre latérale repliée sur ses icônes.
   sidebar_collapsed: string;
+  // 'true' | 'false' — sources de paroles en ligne, consultées dans l'ordre
+  // (LRCLIB d'abord, synchronisée ; lyrics.ovh en repli, texte simple).
+  lyrics_lrclib: string;
+  lyrics_ovh: string;
   // 'true' | 'false' — sections d'épinglés de la barre latérale. Visibles par défaut.
   show_sidebar_playlists: string;
   network_players: string;          // 'true' | 'false' — lecteurs réseau (UPnP), désactivés par défaut
@@ -115,6 +119,8 @@ export const settingsDefaults: AppSettings = {
   track_columns: '["artist","album","rating","duration"]',
   track_column_widths: '{}',
   sidebar_collapsed: 'false',
+  lyrics_lrclib: 'true',
+  lyrics_ovh: 'true',
   show_sidebar_playlists: 'true',
   network_players: 'false',
   airplay: 'false',

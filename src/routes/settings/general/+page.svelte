@@ -41,6 +41,13 @@
         ],
       },
       {
+        titre: txt("group_lyrics"), hint: txt("group_lyrics_hint"),
+        items: [
+          { cle: "lyrics_lrclib", titre: txt("lyrics_lrclib"), desc: txt("lyrics_lrclib_desc"), motsCles: "lrclib paroles lyrics" },
+          { cle: "lyrics_ovh", titre: txt("lyrics_ovh"), desc: txt("lyrics_ovh_desc"), motsCles: "ovh paroles lyrics" },
+        ],
+      },
+      {
         titre: txt("group_system"), hint: txt("group_system_hint"),
         items: [
           { cle: "system_media_controls", titre: txt("system_media_controls"), desc: txt("system_media_controls_desc"), motsCles: "smtc mpris" },

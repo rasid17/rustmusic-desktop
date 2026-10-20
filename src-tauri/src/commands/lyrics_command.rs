@@ -1,5 +1,6 @@
 use tauri::State;
 use crate::repository::library::library_files_repository::LibraryFilesRepository;
+use crate::repository::settings::settings_repository::SettingsRepository;
 
 use crate::core::audio_lyrics::{lrclib_client, lyrics_ovh_client, sidecar};
 use crate::entity::audio_lyrics::lyrics::{Lyrics, LyricsSource, LyricsUpsert};
@@ -17,6 +18,17 @@ async fn find_file_id_by_path(
     LibraryFilesRepository::find_id_by_path(pool, path).await
 }
 
+/// Source de paroles en ligne activée dans les réglages ? Active sauf « false »
+/// explicite — une clé absente de la base vaut son défaut.
+async fn reglage_actif(pool: &sqlx::SqlitePool, cle: &str) -> bool {
+    SettingsRepository::get(pool, cle)
+        .await
+        .ok()
+        .flatten()
+        .as_deref()
+        != Some("false")
+}
+
 /// Récupère les paroles d'un morceau via son chemin de fichier audio.
 ///
 /// On accepte le `path` plutôt qu'un track_id parce que le player garde
@@ -28,8 +40,8 @@ async fn find_file_id_by_path(
 /// 2. Lookup library_tracks via file_id → métadonnées + library_track_id
 /// 3. Cache DB (renvoyé tel quel même si partiel ou "none")
 /// 4. Sidecar `.lrc` à côté du fichier
-/// 5. LRCLIB en ligne (throttlé, avec pause après rejet)
-/// 6. Repli lyrics.ovh (texte simple seul)
+/// 5. LRCLIB en ligne (throttlé, avec pause après rejet), si activé en réglages
+/// 6. Repli lyrics.ovh (texte simple seul), si activé
 /// 7. Rien trouvé → marque `source=none` pour ne pas re-spammer ; une panne
 ///    de service n'est pas une absence et ne se met pas en cache.
 #[tauri::command]
@@ -93,7 +105,11 @@ pub async fn get_lyrics(
         return Ok(None);
     }
 
-    let lrclib = lrclib_client::fetch_lyrics(&artist, &title, album.as_deref(), duration).await;
+    let lrclib = if reglage_actif(&state.pool, "lyrics_lrclib").await {
+        lrclib_client::fetch_lyrics(&artist, &title, album.as_deref(), duration).await
+    } else {
+        Ok(None)
+    };
 
     if let Ok(Some(resp)) = lrclib {
         let saved = LyricsRepository::upsert(
@@ -115,7 +131,12 @@ pub async fn get_lyrics(
     // 6. Repli lyrics.ovh : du texte simple, quand LRCLIB n'a rien eu
     // (absent, en pause ou en panne). Mieux vaut un texte figé que rien.
     let mut panne = matches!(lrclib, Err(_));
-    match lyrics_ovh_client::fetch_plain(&artist, &title).await {
+    let ovh = if reglage_actif(&state.pool, "lyrics_ovh").await {
+        lyrics_ovh_client::fetch_plain(&artist, &title).await
+    } else {
+        Ok(None)
+    };
+    match ovh {
         Ok(Some(plain)) => {
             let saved = LyricsRepository::upsert(
                 &state.pool,
