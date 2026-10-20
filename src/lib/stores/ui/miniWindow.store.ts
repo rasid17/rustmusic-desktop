@@ -171,17 +171,14 @@ export async function enterMicroPlayer(): Promise<void> {
   }
 }
 
-/** Redimensionne le micro en gardant le carré (poignée du coin), sans recaler pendant le geste. */
+/** Redimensionne le micro en gardant le carré (poignée du coin). */
 export async function resizeMicroPlayer(size: number): Promise<void> {
   if (!get(microPlayerActive)) return;
-  const next = Math.round(Math.max(MICRO_MIN, Math.min(MICRO_MAX, size)));
-  // Sous Wayland, rétrécir re-mappe la fenêtre : pendant le glisser, on ne
-  // laisse passer que les agrandissements ; le repli se fait d'un coup à la fin.
-  if (gtkSize && next < microSize) {
-    microSize = next;
-    return;
-  }
-  microSize = next;
+  microSize = Math.round(Math.max(MICRO_MIN, Math.min(MICRO_MAX, size)));
+  // Wayland change de taille en re-mappant : appliquer image par image pendant
+  // le glisser ferait clignoter la fenêtre. Le carré prend sa taille finale à
+  // la fin du geste (endMicroResize).
+  if (gtkSize) return;
   try {
     await applyMiniSize(microSize, microSize);
   } catch (e) {
@@ -245,15 +242,16 @@ function animateMiniHeight(to: number): void {
   step();
 }
 
-/** Ouvre (déroulé) ou ferme le panneau, avec animation. */
+/** Ouvre (déroulé) ou ferme le panneau. */
 export function setMiniExpanded(exp: boolean): void {
   expanded = exp;
   const to = exp ? collapsedH + PANEL_H : collapsedH;
   // Sous Wayland la fenêtre ne se déplace pas elle-même : le recadrage reste
-  // tenté (utile en X11) mais l'animation ne l'attend pas.
+  // tenté (utile en X11) mais ne bloque rien.
   if (exp) void keepOnScreen(MINI_W, to);
-  // Wayland ne rétrécit pas une fenêtre image par image : le repli d'un seul coup.
-  if (!exp && gtkSize) void setH(collapsedH);
+  // Wayland ne change de taille que par re-mappe : l'animer la ferait clignoter
+  // soixante fois par seconde. Le saut est unique.
+  if (gtkSize) void setH(to);
   else animateMiniHeight(to);
 }
 

@@ -211,14 +211,6 @@ pub fn set_compact_window_size(
                     log::error!("🪟 gtk_window introuvable pour {}", target.label());
                     return;
                 };
-                log::info!(
-                    "🪟 compact {} : demande {}x{} (actuel {}x{})",
-                    target.label(),
-                    width.unwrap_or(-1),
-                    height.unwrap_or(-1),
-                    gtk_window.size().0,
-                    gtk_window.size().1
-                );
                 match (width, height) {
                     (Some(w), Some(h)) => {
                         let (cw, ch) = gtk_window.size();
@@ -226,14 +218,21 @@ pub fn set_compact_window_size(
                         if let Some(enfant) = gtk_window.child() {
                             enfant.set_size_request(w, h);
                         }
-                        if w < cw || h < ch {
-                            // Wayland : le compositeur suit la taille que le client
-                            // lui commit ; rien ne le force à rétrécir. Un re-map
-                            // engage la nouvelle taille demandée.
+                        if (w != cw || h != ch) && gtk_window.is_visible() {
+                            // Wayland : le compositeur n'adopte une taille
+                            // nouvelle qu'à la faveur d'une re-mappe (ou d'un
+                            // geste de l'utilisateur). On re-mappe donc — d'où
+                            // un seul saut de taille côté interface, jamais une
+                            // animation. La position est remise telle quelle :
+                            // sans effet sous Wayland (le compositeur décide),
+                            // précieuse sous X11.
+                            let (px, py) = gtk_window.position();
                             gtk_window.hide();
                             gtk_window.present();
+                            gtk_window.move_(px, py);
                         }
                         gtk_window.resize(w, h);
+                        log::info!("🪟 compact {} : {w}x{h} (avant {cw}x{ch})", target.label());
                     }
                     _ => gtk_window.set_size_request(-1, -1),
                 }
