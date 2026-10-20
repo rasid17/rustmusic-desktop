@@ -10,13 +10,12 @@
   import PlayerProgressBar from "./PlayerProgressBar.svelte";
   import { t } from "#lib/i18n";
   import { player } from "#lib/stores/player/player.store";
-  import { playerService } from "#lib/services/player/player.service";
   import { volume, applyVolume } from "#lib/stores/player/volume.store";
   import { playbackPipelineStore } from "#lib/stores/player/playbackPipeline.store";
-  import { settingsStore } from "#lib/stores/settings/settings.store";
   import { couleurMorceau } from "#lib/stores/player/trackColor.store";
   import { minutesSeconds } from "#lib/helper/tools/dateTools";
-  import { exitMicroPlayer, exitMiniPlayer, miniPinned, toggleMiniPin, resizeMicroPlayer, endMicroResize, currentMicroSize } from "#lib/stores/ui/miniPlayer.store";
+  import { exitMicroPlayer, miniPinned, toggleMiniPin, resizeMicroPlayer, endMicroResize, currentMicroSize } from "#lib/stores/ui/miniWindow.store";
+  import { sendCmd } from "#lib/services/mini/miniBridge";
 
   const NO_COVER = "/images/no-cd.png";
 
@@ -67,13 +66,10 @@
     void getCurrentWindow().startDragging();
   }
 
-  // Même règle que la barre de titre : réduire dans la zone de notification, ou fermer.
-  async function close() {
-    const w = getCurrentWindow();
-    if ($settingsStore.minimize_to_tray === "true") return w.hide();
-    await w.hide();
-    await exitMiniPlayer();
-    await w.close();
+  // Même règle que la barre de titre : réduire dans la zone de notification,
+  // ou fermer. La fenêtre principale (masquée) tranche et agit.
+  function close() {
+    sendCmd("close-app");
   }
 
   // Poignée du coin : le carré grandit de la plus grande des deux distances, jusqu'à ×3.
@@ -134,7 +130,7 @@
     </div>
 
     <div class="flex-1 flex items-center justify-center gap-1.5">
-      <button type="button" class={sideButton} title={$t("player.prev")} aria-label={$t("player.prev")} onclick={() => playerService.prevTrack()}>
+      <button type="button" class={sideButton} title={$t("player.prev")} aria-label={$t("player.prev")} onclick={() => sendCmd("prev")}>
         <Icon icon="material-symbols:skip-previous-rounded" width="28" />
       </button>
       <button type="button"
@@ -142,11 +138,11 @@
               title={waiting ? $t("player.preparing") : isPlaying ? $t("player.pause") : $t("player.play")}
               aria-label={isPlaying ? $t("player.pause") : $t("player.play")}
               aria-busy={waiting}
-              onclick={() => playerService.handleTogglePlay()}>
+              onclick={() => sendCmd("toggle-play")}>
         <Icon icon={isPlaying ? "material-symbols:pause-rounded" : "material-symbols:play-arrow-rounded"} width="32" />
         <LoadingRing actif={waiting} />
       </button>
-      <button type="button" class={sideButton} title={$t("player.next")} aria-label={$t("player.next")} onclick={() => playerService.nextTrack()}>
+      <button type="button" class={sideButton} title={$t("player.next")} aria-label={$t("player.next")} onclick={() => sendCmd("next")}>
         <Icon icon="material-symbols:skip-next-rounded" width="28" />
       </button>
     </div>
@@ -154,7 +150,7 @@
     <!-- Timeline du morceau, et le volume à droite -->
     <div class="flex items-center gap-1.5 pl-3 pr-1.5 pb-3.5" data-no-drag>
       <div class="flex-1 min-w-0">
-        <PlayerProgressBar position={percent} onseek={(p) => duration && playerService.seekTo((p / 100) * duration)} />
+        <PlayerProgressBar position={percent} onseek={(p) => duration && sendCmd("seek", { position: (p / 100) * duration })} />
       </div>
       <MiniVolume buttonClass={topButton} placement="above" forceVertical />
     </div>

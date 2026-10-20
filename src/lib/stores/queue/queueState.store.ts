@@ -84,6 +84,12 @@ export const queueState = {
         }
     },
 
+    // Fenêtre du mini-lecteur : remplace l'état reçu de la fenêtre principale,
+    // sans écrire dans SQLite (la principale reste la seule à persister).
+    hydrate: (partial: Partial<QueueState>) => {
+        queueStateWritable.update((state) => ({ ...state, ...partial }));
+    },
+
     //2a Ajouter un morceau en début de liste
     addTrack: async (trackData: Omit<QueueTrack, 'queueId' | 'profilId' | 'position'>) => {
         const qs = get(queueStateWritable);

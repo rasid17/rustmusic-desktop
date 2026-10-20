@@ -1,15 +1,29 @@
 import { writable } from "svelte/store";
 import { invoke } from "@tauri-apps/api/core";
+import { listen, emit, type UnlistenFn } from "@tauri-apps/api/event";
 
 /** Volume du lecteur (0–100), partagé : glissière, raccourcis et pastille bit-perfect. */
 export const volume = writable(80);
 
 let minuteur: ReturnType<typeof setTimeout> | null = null;
 
+// Fenêtres principale et mini : ce que l'une règle, l'autre le suit.
+let syncUnlisten: UnlistenFn | null = null;
+
+/** Écoute les changements de volume faits dans l'autre fenêtre. */
+export function initVolumeSync(): void {
+  if (syncUnlisten) return;
+  void listen<number>("volume-sync", (e) => volume.set(e.payload)).then((f) => {
+    syncUnlisten = f;
+  });
+}
+
 /** Relit le volume du moteur (au démarrage, après une sourdine par raccourci). */
 export async function loadVolume(): Promise<void> {
   try {
-    volume.set(await invoke<number>("get_volume"));
+    const v = await invoke<number>("get_volume");
+    volume.set(v);
+    emit("volume-sync", v).catch(() => {});
   } catch (e) {
     console.error("[volume] lecture :", e);
   }
@@ -22,5 +36,6 @@ export function applyVolume(v: number): void {
   if (minuteur) clearTimeout(minuteur);
   minuteur = setTimeout(() => {
     invoke("set_volume", { volume: borne }).catch((e) => console.error("[volume] réglage :", e));
+    emit("volume-sync", borne).catch(() => {});
   }, 50);
 }

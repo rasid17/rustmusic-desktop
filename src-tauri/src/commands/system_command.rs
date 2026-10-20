@@ -194,6 +194,7 @@ fn light_effects_reason() -> Option<String> {
 /// Taille du mini et du micro-lecteur sous Linux : GTK ignore tout redimensionnement
 /// d'une fenêtre non redimensionnable, sauf la taille demandée au widget. La fenêtre
 /// reste fixe, sans les bords saisissables que tao ajoute aux fenêtres redimensionnables.
+/// Appelée depuis la fenêtre mini : c'est elle que la commande redimensionne.
 #[tauri::command]
 pub fn set_compact_window_size(
     window: tauri::WebviewWindow,
@@ -205,11 +206,22 @@ pub fn set_compact_window_size(
         let target = window.clone();
         window
             .run_on_main_thread(move || {
-                use gtk::prelude::{GtkWindowExt, WidgetExt};
+                use gtk::prelude::{BinExt, GtkWindowExt, WidgetExt};
                 let Ok(gtk_window) = target.gtk_window() else { return };
                 match (width, height) {
                     (Some(w), Some(h)) => {
+                        let (cw, ch) = gtk_window.size();
                         gtk_window.set_size_request(w, h);
+                        if let Some(enfant) = gtk_window.child() {
+                            enfant.set_size_request(w, h);
+                        }
+                        if w < cw || h < ch {
+                            // Wayland : le compositeur suit la taille que le client
+                            // lui commit ; rien ne le force à rétrécir. Un re-map
+                            // engage la nouvelle taille demandée.
+                            gtk_window.hide();
+                            gtk_window.present();
+                        }
                         gtk_window.resize(w, h);
                     }
                     _ => gtk_window.set_size_request(-1, -1),
@@ -220,10 +232,4 @@ pub fn set_compact_window_size(
     #[cfg(not(target_os = "linux"))]
     let _ = (window, width, height);
     Ok(())
-}
-
-/// Mini ou micro-lecteur actif : la taille et la position du mode normal ne sont plus réécrites.
-#[tauri::command]
-pub fn set_compact_mode(app: tauri::AppHandle, active: bool) {
-    crate::core::window_geometry::set_compact(&app, active);
 }

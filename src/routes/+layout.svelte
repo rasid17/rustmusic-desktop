@@ -45,9 +45,9 @@ import { page } from "$app/state";
 import { afterNavigate } from "$app/navigation";
 import { rememberPage } from "#lib/stores/ui/settingsReturn.store";
 import SelectionBar from "#lib/components/ui/selection/SelectionBar.svelte";
-import MiniPlayer from "#lib/components/player/MiniPlayer.svelte";
-import MicroPlayer from "#lib/components/player/MicroPlayer.svelte";
-import { miniPlayerActive, microPlayerActive, ensureNormalSize, toggleMiniPlayer } from "#lib/stores/ui/miniPlayer.store";
+import MiniRoot from "#lib/components/player/MiniRoot.svelte";
+import { ensureNormalSize, toggleMiniPlayer } from "#lib/stores/ui/miniPlayer.store";
+import { isMiniWindow } from "#lib/services/mini/miniBridge";
 import { resolveShortcuts, eventToBinding, findAction, type ShortcutAction } from "#lib/config/shortcuts";
 import { applyAccent } from "#lib/helper/theme/accent";
 import SleepTimerButton from "#lib/components/player/SleepTimerButton.svelte";
@@ -56,7 +56,11 @@ import { openExternalLinks } from "#lib/helper/tools/externalLinks";
 import { lecture } from "#lib/stores/player/playback.store";
 import { listen } from "@tauri-apps/api/event";
 import { preventShiftSelection } from "#lib/helper/tools/shiftSelection";
-import { volume, loadVolume, applyVolume } from "#lib/stores/player/volume.store";
+import { volume, loadVolume, applyVolume, initVolumeSync } from "#lib/stores/player/volume.store";
+
+// Cette fenêtre est-elle celle du mini-lecteur ? Elle n'affiche alors que la
+// télécommande compacte (MiniRoot) : ni initialisation lourde, ni navigation.
+const miniFenetre = isMiniWindow();
 
 // Affichage du bouton sleep timer dans le header (désactivable dans les réglages).
 let showSleepTimer = $derived($settingsStore.show_sleep_timer !== 'false');
@@ -88,19 +92,31 @@ $effect(() => {
   setTimeout(() => ecran.remove(), 250);
 });
 
-onMount(openExternalLinks);
-onMount(() => void loadVolume());
+onMount(() => {
+  if (miniFenetre) return;
+  return openExternalLinks();
+});
+onMount(() => {
+  if (miniFenetre) return;
+  initVolumeSync();
+  void loadVolume();
+});
 
-onMount(preventShiftSelection);
+onMount(() => {
+  if (miniFenetre) return;
+  return preventShiftSelection();
+});
 
 // Pas de veille automatique tant que la musique joue (réglage) ; l'écran peut s'éteindre.
 $effect(() => {
+  if (miniFenetre) return;
   const bloquer = $lecture.status === "playing" && $settingsStore.prevent_sleep !== "false";
   invoke("set_sleep_blocked", { bloquer }).catch(() => {});
 });
 
 // Mise en veille annoncée (Linux) : pause, pour ne pas laisser la sortie audio ouverte. Au réveil, on reste en pause.
 onMount(() => {
+  if (miniFenetre) return;
   const fin = listen<boolean>("systeme-veille", (e) => {
     if (e.payload && get(player).status === "playing") playerService.pauseFile();
   });
@@ -108,6 +124,9 @@ onMount(() => {
 });
 
 onMount(async () => {
+  // La fenêtre mini n'initialise rien de tout ça : MiniRoot s'en charge.
+  if (miniFenetre) return;
+
   // Fermée en mode mini, la fenêtre rouvrirait toute petite : plancher et taille d'origine.
   void ensureNormalSize();
 
@@ -189,6 +208,7 @@ onMount(async () => {
 });
 
 onDestroy(() => {
+  if (miniFenetre) return;
   playerService.destroy();
   importProgressStore.destroy();
   taskProgressStore.destroy();
@@ -223,6 +243,8 @@ const shortcutHandlers: Record<ShortcutAction, () => void> = {
 };
 
 function handleKeydown(e: KeyboardEvent) {
+  // La fenêtre mini a ses propres raccourcis (MiniRoot), bornés à la lecture.
+  if (miniFenetre) return;
   // Ignorer si on est dans un champ, ou sur une glissière qui gère ses flèches
   const target = e.target as HTMLElement;
   const tag = target?.tagName;
@@ -239,11 +261,11 @@ function handleKeydown(e: KeyboardEvent) {
 <svelte:window onkeydown={handleKeydown} />
 
 
-{#if !$profilSelector.initialized}
+{#if miniFenetre}
+  <!-- Fenêtre du mini-lecteur : la télécommande compacte, sans le reste de l'appli. -->
+  <MiniRoot />
+{:else if !$profilSelector.initialized}
   <!-- L'écran de chargement d'app.html reste affiché. -->
-{:else if $miniPlayerActive}
-  <!-- Mode mini-player : la fenêtre est réduite et always-on-top ; le micro n'en garde que la pochette -->
-  {#if $microPlayerActive}<MicroPlayer />{:else}<MiniPlayer />{/if}
 {:else}
 <main class="w-screen h-screen flex flex-col bg-(--c-fond) dark:bg-zinc-950 text-gray-900 dark:text-gray-100 overflow-hidden">
   <!-- Barre unique : la barre de titre porte la navigation, la recherche et les

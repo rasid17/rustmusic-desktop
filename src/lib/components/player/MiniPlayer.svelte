@@ -5,16 +5,13 @@
   import LoadingRing from "#lib/components/ui/loader/LoadingRing.svelte";
   import { volume } from "#lib/stores/player/volume.store";
   import { fade } from "svelte/transition";
-  import { getCurrentWindow } from "@tauri-apps/api/window";
   import CoverImg from "#lib/components/ui/image/CoverImg.svelte";
   import LogoRustMusic from "#lib/components/ui/logo/LogoRustMusic.svelte";
   import PlayerProgressBar from "./PlayerProgressBar.svelte";
   import { t, currentLocale } from "#lib/i18n";
   import { player } from "#lib/stores/player/player.store";
-  import { playerService } from "#lib/services/player/player.service";
   import { queueState } from "#lib/stores/queue/queueState.store";
   import { liked } from "#lib/stores/playlist/like.store";
-  import { settingsStore } from "#lib/stores/settings/settings.store";
   import { couleurMorceau } from "#lib/stores/player/trackColor.store";
   import { playbackPipelineStore, pipelineMode } from "#lib/stores/player/playbackPipeline.store";
   import { CHAINE } from "#lib/helper/audio/audioChain";
@@ -23,8 +20,8 @@
   import { dsdLabel, formatDsdRate, isDsdFormat } from "#lib/helper/tools/audioFormatTools";
   import { getLyrics, type Lyrics } from "#lib/services/lyrics/lyrics.service";
   import { parseLrc, findActiveLineIndex, type LrcLine } from "#lib/helper/lyrics/lrcParser";
-  import { exitMiniPlayer, enterMicroPlayer, setMiniExpanded, reportCollapsedHeight, miniPinned, toggleMiniPin } from "#lib/stores/ui/miniPlayer.store";
-  import type { QueueTrack } from "#lib/types/db/queue/QueueTrack";
+  import { enterMicroPlayer, setMiniExpanded, reportCollapsedHeight, miniPinned, toggleMiniPin } from "#lib/stores/ui/miniWindow.store";
+  import { sendCmd } from "#lib/services/mini/miniBridge";
 
   const audioFile = $derived($player?.audioFile);
   const audioTags = $derived(audioFile?.tags);
@@ -71,9 +68,8 @@
 
   const absoluteIndex = (i: number) => (currentIndex > -1 ? currentIndex + 1 : 0) + i;
 
-  async function playAt(track: QueueTrack, i: number) {
-    await queueState.setCurrentIndex(absoluteIndex(i));
-    await playerService.playFile(track);
+  function playAt(i: number) {
+    sendCmd("play-at", { index: absoluteIndex(i) });
   }
 
   // Glisser-déposer par la poignée (elle capture le pointeur), comme dans la file complète.
@@ -92,7 +88,7 @@
     if (ligne) survol = Number(ligne.dataset.qi);
   }
   function drop() {
-    if (depart !== null && survol !== null && depart !== survol) queueState.reorderTracks(absoluteIndex(depart), absoluteIndex(survol));
+    if (depart !== null && survol !== null && depart !== survol) sendCmd("reorder", { from: absoluteIndex(depart), to: absoluteIndex(survol) });
     depart = null;
     survol = null;
   }
@@ -162,14 +158,10 @@
     return () => ro.disconnect();
   });
 
-  // Même règle que la barre de titre. Avant de quitter, la fenêtre (masquée) reprend sa taille
-  // normale : c'est celle-là que l'appli retiendra pour le prochain lancement.
-  async function fermer() {
-    const w = getCurrentWindow();
-    if ($settingsStore.minimize_to_tray === "true") return w.hide();
-    await w.hide();
-    await exitMiniPlayer();
-    await w.close();
+  // Comme la barre de titre : réduit l'appli dans la zone de notification, ou
+  // la quitte. C'est la fenêtre principale (masquée) qui tranche et agit.
+  function fermer() {
+    sendCmd("close-app");
   }
 
   // L'image « sans pochette » de l'appli, plutôt qu'un carré vide.
@@ -209,7 +201,7 @@
       <button type="button" class={tb} title={$t("mini.micro")} aria-label={$t("mini.micro")} onclick={() => enterMicroPlayer()}>
         <Icon icon="ph:picture-in-picture" width="17" />
       </button>
-      <button type="button" class={tb} title={$t("mini.restore")} aria-label={$t("mini.restore")} onclick={() => exitMiniPlayer()}>
+      <button type="button" class={tb} title={$t("mini.restore")} aria-label={$t("mini.restore")} onclick={() => sendCmd("exit-mini")}>
         <Icon icon="material-symbols-light:open-in-full-rounded" width="17" />
       </button>
       <button type="button" class="{tb} hover:bg-[#c42b1c]! hover:text-white!" title={$t("common.close")} aria-label={$t("common.close")} onclick={fermer}>
@@ -238,7 +230,7 @@
       {#if hasTrack}
         <button type="button" class="self-start w-8 h-8 shrink-0 flex items-center justify-center rounded-full cursor-pointer transition-colors hover:bg-(--lc-survol)
                                     {aime ? 'text-[#e2566a] dark:text-[#ff7a88]' : 'text-(--lc-ic) hover:text-(--lc-tx)'}"
-                title={$t("player.like")} aria-label={$t("player.like")} aria-pressed={aime} onclick={() => pathFile && liked.toggle(pathFile)}>
+                title={$t("player.like")} aria-label={$t("player.like")} aria-pressed={aime} onclick={() => pathFile && sendCmd("toggle-like", { path: pathFile })}>
           <Icon icon={aime ? "material-symbols:favorite-rounded" : "material-symbols-light:favorite-outline-rounded"} width="20" />
         </button>
       {/if}
@@ -247,21 +239,21 @@
     <!-- Commandes et progression -->
     <div class="flex items-center gap-3 px-4 pt-3">
       <div class="flex items-center gap-0.5 shrink-0">
-        <button type="button" class={ib} title={$t("player.prev")} aria-label={$t("player.prev")} onclick={() => playerService.prevTrack()}>
+        <button type="button" class={ib} title={$t("player.prev")} aria-label={$t("player.prev")} onclick={() => sendCmd("prev")}>
           <Icon icon="material-symbols:skip-previous-rounded" width="28" />
         </button>
         <button type="button" class="lecteur-lecture relative w-11.5 h-11.5 flex items-center justify-center rounded-full cursor-pointer transition-transform hover:scale-105 active:scale-95 bg-(--lc-play) text-(--lc-play-tx)"
                 title={enAttente ? $t("player.preparing") : isPlaying ? $t("player.pause") : $t("player.play")} aria-label={isPlaying ? $t("player.pause") : $t("player.play")}
-                aria-busy={enAttente} onclick={() => playerService.handleTogglePlay()}>
+                aria-busy={enAttente} onclick={() => sendCmd("toggle-play")}>
           <Icon icon={isPlaying ? "material-symbols:pause-rounded" : "material-symbols:play-arrow-rounded"} width="28" />
           <LoadingRing actif={enAttente} />
         </button>
-        <button type="button" class={ib} title={$t("player.next")} aria-label={$t("player.next")} onclick={() => playerService.nextTrack()}>
+        <button type="button" class={ib} title={$t("player.next")} aria-label={$t("player.next")} onclick={() => sendCmd("next")}>
           <Icon icon="material-symbols:skip-next-rounded" width="28" />
         </button>
       </div>
       <div class="flex-1 min-w-0 flex flex-col gap-0.5">
-        <PlayerProgressBar position={percent} onseek={(p) => duration && playerService.seekTo((p / 100) * duration)} />
+        <PlayerProgressBar position={percent} onseek={(p) => duration && sendCmd("seek", { position: (p / 100) * duration })} />
         <div class="flex justify-between font-mono text-[10px] tabular-nums text-(--lc-mu)">
           <span>{minutesSeconds(jsPosition)}</span><span>{minutesSeconds(duration)}</span>
         </div>
@@ -309,7 +301,7 @@
             <span>{suite.length === 1 ? $t("mini.next_one") : $t("mini.next_count").replace("{n}", String(suite.length))}</span>
             {#if suite.length > 0 && enCours}
               <button type="button" class="normal-case tracking-normal text-[11px] font-semibold cursor-pointer text-(--lc-mu) hover:text-(--lc-tx)"
-                      title={$t("mini.clear_next_hint")} onclick={() => queueState.clearUpcoming()}>{$t("mini.clear_next")}</button>
+                      title={$t("mini.clear_next_hint")} onclick={() => sendCmd("clear-upcoming")}>{$t("mini.clear_next")}</button>
             {/if}
           </div>
 
@@ -323,8 +315,8 @@
                 tabindex="0"
                 class="group flex items-center gap-3 mx-1.5 py-1.5 pl-2 pr-2.5 rounded-[10px] cursor-pointer transition-colors hover:bg-(--lc-survol)
                        {depart === i ? 'opacity-50' : ''} {depart !== null && survol === i && depart !== i ? 'shadow-[inset_0_2px_0_var(--lc-acc)]' : ''}"
-                onclick={() => playAt(track, i)}
-                onkeydown={(e) => { if (e.key === "Enter") playAt(track, i); }}
+                onclick={() => playAt(i)}
+                onkeydown={(e) => { if (e.key === "Enter") playAt(i); }}
               >
                 <span class="w-3.5 shrink-0 flex justify-center text-(--lc-mu2) opacity-0 group-hover:opacity-100 cursor-grab active:cursor-grabbing touch-none"
                       title={$t("mini.move")} role="presentation" onpointerdown={(e) => grab(e, i)} onpointermove={drag} onpointerup={drop}
@@ -340,7 +332,7 @@
                   <span class="font-mono text-[11px] tabular-nums text-(--lc-mu) group-hover:hidden">{minutesSeconds(track.duration)}</span>
                 {/if}
                 <button type="button" class="hidden group-hover:flex w-6.5 h-6.5 items-center justify-center rounded-md cursor-pointer text-(--lc-mu) hover:bg-(--lc-survol) hover:text-(--lc-tx)"
-                        title={$t("mini.remove")} aria-label={$t("mini.remove")} onclick={(e) => { e.stopPropagation(); queueState.removeTrack(track.queueId); }}>
+                        title={$t("mini.remove")} aria-label={$t("mini.remove")} onclick={(e) => { e.stopPropagation(); sendCmd("remove-track", { queueId: track.queueId }); }}>
                   <Icon icon="material-symbols-light:close-rounded" width="16" />
                 </button>
               </div>
@@ -361,7 +353,7 @@
                        transition-[color,transform] duration-250 hover:text-(--lc-tx2)
                        {i === active ? 'text-(--lc-tx) scale-104 first-letter:text-(--lc-acc)' : i < active ? 'text-(--lc-ly-passe)' : 'text-(--lc-ly)'}"
                 title={$t("mini.jump_line")}
-                onclick={() => playerService.seekTo(ligne.timeMs / 1000)}
+                onclick={() => sendCmd("seek", { position: ligne.timeMs / 1000 })}
               >{ligne.text || "♪"}</button>
             {/each}
             <div class="h-27.5"></div>

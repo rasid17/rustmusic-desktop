@@ -111,13 +111,19 @@ function createLikedStore() {
     return isLikedNow ? unlike(path) : like(path);
   }
 
+  /** Fenêtre du mini-lecteur : remplace l'ensemble reçu de la fenêtre principale. */
+  function hydrate(paths: Set<string>) {
+    set({ paths, loading: false });
+    likedCount.set(paths.size);
+  }
+
   /** Aime (ou retire) toute une liste : un album, un artiste. */
   async function toggleAll(paths: string[], aimer: boolean) {
     const deja = get({ subscribe }).paths;
     await Promise.all(paths.map((p) => (aimer ? (deja.has(p) ? null : like(p)) : unlike(p))));
   }
 
-  return { subscribe, likedCount, refresh, like, unlike, toggle, toggleAll };
+  return { subscribe, likedCount, refresh, like, unlike, toggle, toggleAll, hydrate };
 }
 
 export const liked = createLikedStore();
