@@ -1,8 +1,51 @@
 use serde::Deserialize;
+use std::time::Duration;
+use tokio::sync::Mutex;
+use tokio::time::Instant;
 
 const LRCLIB_GET_URL: &str = "https://lrclib.net/api/get";
 const LRCLIB_SEARCH_URL: &str = "https://lrclib.net/api/search";
 const USER_AGENT: &str = "RustMusic/0.1.4 (https://rustmusic.dev)";
+
+/// LRCLIB demande une requête par seconde au maximum. Passer outre vaut des
+/// 429, et donc des paroles absentes pour tout le monde pendant un moment.
+const MIN_INTERVAL: Duration = Duration::from_millis(1_100);
+/// Après un rejet (429) ou une panne (5xx), on ne re-tente plus pendant ce délai.
+const COOLDOWN_REJET: Duration = Duration::from_secs(60);
+const COOLDOWN_PANNE: Duration = Duration::from_secs(30);
+
+static LAST_CALL: Mutex<Option<Instant>> = Mutex::const_new(None);
+static COOLDOWN_UNTIL: Mutex<Option<Instant>> = Mutex::const_new(None);
+
+/// Attend si nécessaire pour tenir le débit d'une requête par seconde.
+async fn throttle() {
+    let mut last = LAST_CALL.lock().await;
+    if let Some(previous) = *last {
+        let elapsed = previous.elapsed();
+        if elapsed < MIN_INTERVAL {
+            tokio::time::sleep(MIN_INTERVAL - elapsed).await;
+        }
+    }
+    *last = Some(Instant::now());
+}
+
+/// Le service a rejeté ou est tombé : on le laisse respirer.
+async fn mettre_en_pause(duree: Duration) {
+    *COOLDOWN_UNTIL.lock().await = Some(Instant::now() + duree);
+}
+
+/// `Err` tant que la pause est en cours — la cascade passera alors à la suite
+/// sans marquer le morceau comme « sans paroles ».
+async fn verifier_pause() -> Result<(), String> {
+    let garde = COOLDOWN_UNTIL.lock().await;
+    if let Some(until) = *garde {
+        let now = Instant::now();
+        if now < until {
+            return Err(format!("LRCLIB en pause ({} s restantes)", (until - now).as_secs()));
+        }
+    }
+    Ok(())
+}
 
 /// Réponse brute renvoyée par LRCLIB.
 #[derive(Debug, Deserialize, Clone)]
@@ -29,6 +72,10 @@ pub async fn fetch_lyrics(
     album: Option<&str>,
     duration: u32,
 ) -> Result<Option<LrclibResponse>, String> {
+
+    // En pause après un rejet : la cascade ira chercher ailleurs sans perdre
+    // la trace du morceau (il n'est pas « sans paroles », juste non demandé).
+    verifier_pause().await?;
 
     let client = reqwest::Client::builder()
         .user_agent(USER_AGENT)
@@ -89,6 +136,8 @@ async fn try_get(
         url.push_str(&format!("&duration={}", duration));
     }
 
+    throttle().await;
+
     let response = client
         .get(&url)
         .send()
@@ -101,6 +150,11 @@ async fn try_get(
         return Ok(None);
     }
     if !status.is_success() {
+        if status == reqwest::StatusCode::TOO_MANY_REQUESTS {
+            mettre_en_pause(COOLDOWN_REJET).await;
+        } else if status.is_server_error() {
+            mettre_en_pause(COOLDOWN_PANNE).await;
+        }
         return Err(format!("LRCLIB /get returned {}", status));
     }
 
@@ -129,6 +183,8 @@ async fn try_search(
         urlencoding::encode(title),
     );
 
+    throttle().await;
+
     let response = client
         .get(&url)
         .send()
@@ -136,6 +192,12 @@ async fn try_search(
         .map_err(|e| format!("LRCLIB /search failed: {}", e))?;
 
     if !response.status().is_success() {
+        let status = response.status();
+        if status == reqwest::StatusCode::TOO_MANY_REQUESTS {
+            mettre_en_pause(COOLDOWN_REJET).await;
+        } else if status.is_server_error() {
+            mettre_en_pause(COOLDOWN_PANNE).await;
+        }
         return Ok(vec![]);
     }
 

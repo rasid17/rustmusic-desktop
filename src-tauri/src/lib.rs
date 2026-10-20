@@ -27,7 +27,7 @@ use crate::commands::recent_command::{clear_recent_files, get_recent_files, inse
 use crate::commands::volume_command::{get_devices, get_volume, set_volume, set_device, mute};
 use crate::commands::settings_command::{get_setting, set_setting, get_all_settings, reset_application};
 use crate::commands::search_command::search;
-use crate::commands::lyrics_command::{get_lyrics, refresh_lyrics};
+use crate::commands::lyrics_command::{get_lyrics, refresh_lyrics, save_lyrics};
 use crate::commands::dlna_command::{dlna_get_settings, dlna_status, dlna_start, dlna_stop, dlna_update_settings};
 use crate::commands::platform_command::{get_platform_features, set_autostart_portal};
 use crate::commands::amp_remote_command::{amp_remote_cover, amp_remote_discover, amp_remote_select, amp_remote_send, amp_remote_status, set_amp_remote_enabled};
@@ -883,6 +883,7 @@ pub async fn run() {
             resolve_blurred_cover,
             get_lyrics,
             refresh_lyrics,
+            save_lyrics,
             dlna_get_settings,
             dlna_status,
             network_players_discover,

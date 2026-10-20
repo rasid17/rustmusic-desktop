@@ -33,3 +33,13 @@ pub fn has_synced_timestamps(content: &str) -> bool {
                 .unwrap_or(false)
     })
 }
+
+/// Écrit un fichier `.lrc` à côté du fichier audio (même nom, extension `.lrc`).
+/// `Err` si le dossier est en lecture seule ou l'écriture impossible — l'appelant
+/// remonte le message, l'utilisateur décide d'ignorer ou de réessayer.
+pub fn write_sidecar_lrc(audio_path: &str, content: &str) -> Result<(), String> {
+    let path = Path::new(audio_path);
+    let lrc_path = path.with_extension("lrc");
+    std::fs::write(&lrc_path, content)
+        .map_err(|e| format!("{} : {e}", lrc_path.display()))
+}

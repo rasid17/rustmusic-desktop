@@ -1,6 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 
-export type LyricsSource = "sidecar" | "lrclib" | "manual" | "none";
+export type LyricsSource = "sidecar" | "lrclib" | "lyricsovh" | "manual" | "none";
 
 export type Lyrics = {
     track_id: string;
@@ -34,4 +34,22 @@ export async function getLyrics(path: string): Promise<Lyrics | null> {
 export async function refreshLyrics(path: string): Promise<Lyrics | null> {
     inFlight.delete(path);
     return await invoke<Lyrics | null>("refresh_lyrics", { path });
+}
+
+/**
+ * Paroles saisies à la main. `ecrireFichier` dépose aussi un `.lrc` à côté du
+ * morceau (peut échouer sur un partage en lecture seule — l'appelant affiche).
+ */
+export async function saveLyrics(
+    path: string,
+    lyrics: { plain: string | null; synced: string | null },
+    ecrireFichier: boolean,
+): Promise<Lyrics> {
+    inFlight.delete(path);
+    return await invoke<Lyrics>("save_lyrics", {
+        path,
+        plain: lyrics.plain,
+        synced: lyrics.synced,
+        ecrireFichier,
+    });
 }

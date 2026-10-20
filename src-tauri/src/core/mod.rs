@@ -31,6 +31,7 @@ pub mod settings_manager {
 
 pub mod audio_lyrics {
     pub mod lrclib_client;
+    pub mod lyrics_ovh_client;
     pub mod sidecar;
 }
 

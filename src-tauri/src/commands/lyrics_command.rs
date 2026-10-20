@@ -1,7 +1,7 @@
 use tauri::State;
 use crate::repository::library::library_files_repository::LibraryFilesRepository;
 
-use crate::core::audio_lyrics::{lrclib_client, sidecar};
+use crate::core::audio_lyrics::{lrclib_client, lyrics_ovh_client, sidecar};
 use crate::entity::audio_lyrics::lyrics::{Lyrics, LyricsSource, LyricsUpsert};
 use crate::repository::audio_lyrics::lyrics_repository::LyricsRepository;
 use crate::repository::library::library_track_repository::LibraryTrackRepository;
@@ -28,8 +28,10 @@ async fn find_file_id_by_path(
 /// 2. Lookup library_tracks via file_id → métadonnées + library_track_id
 /// 3. Cache DB (renvoyé tel quel même si partiel ou "none")
 /// 4. Sidecar `.lrc` à côté du fichier
-/// 5. LRCLIB en ligne
-/// 6. Sinon → marque `source=none` pour ne pas re-spammer
+/// 5. LRCLIB en ligne (throttlé, avec pause après rejet)
+/// 6. Repli lyrics.ovh (texte simple seul)
+/// 7. Rien trouvé → marque `source=none` pour ne pas re-spammer ; une panne
+///    de service n'est pas une absence et ne se met pas en cache.
 #[tauri::command]
 pub async fn get_lyrics(
     state: State<'_, AppState>,
@@ -80,7 +82,7 @@ pub async fn get_lyrics(
         return Ok(Some(saved));
     }
 
-    // 5. LRCLIB
+    // 5. LRCLIB en ligne (paroles synchronisées si possible)
     let artist = track.artist.unwrap_or_default();
     let title = track.title.clone();
     let album = track.album;
@@ -91,32 +93,63 @@ pub async fn get_lyrics(
         return Ok(None);
     }
 
-    match lrclib_client::fetch_lyrics(&artist, &title, album.as_deref(), duration).await {
-        Ok(Some(resp)) => {
+    let lrclib = lrclib_client::fetch_lyrics(&artist, &title, album.as_deref(), duration).await;
+
+    if let Ok(Some(resp)) = lrclib {
+        let saved = LyricsRepository::upsert(
+            &state.pool,
+            LyricsUpsert {
+                track_id: track_id.clone(),
+                plain: resp.plain_lyrics,
+                synced: resp.synced_lyrics,
+                source: LyricsSource::Lrclib,
+                lrclib_id: resp.id,
+            },
+        )
+        .await
+        .map_err(|e| format!("DB upsert error : {}", e))?;
+
+        return Ok(Some(saved));
+    }
+
+    // 6. Repli lyrics.ovh : du texte simple, quand LRCLIB n'a rien eu
+    // (absent, en pause ou en panne). Mieux vaut un texte figé que rien.
+    let mut panne = matches!(lrclib, Err(_));
+    match lyrics_ovh_client::fetch_plain(&artist, &title).await {
+        Ok(Some(plain)) => {
             let saved = LyricsRepository::upsert(
                 &state.pool,
                 LyricsUpsert {
                     track_id: track_id.clone(),
-                    plain: resp.plain_lyrics,
-                    synced: resp.synced_lyrics,
-                    source: LyricsSource::Lrclib,
-                    lrclib_id: resp.id,
+                    plain: Some(plain),
+                    synced: None,
+                    source: LyricsSource::LyricsOvh,
+                    lrclib_id: None,
                 },
             )
             .await
             .map_err(|e| format!("DB upsert error : {}", e))?;
 
-            Ok(Some(saved))
+            return Ok(Some(saved));
         }
-        Ok(None) => {
-            let _ = LyricsRepository::mark_not_found(&state.pool, &track_id).await;
-            Ok(None)
-        }
+        Ok(None) => {}
         Err(e) => {
-            log::warn!("LRCLIB fetch failed for {}: {}", path, e);
-            Err(e)
+            log::warn!("lyrics.ovh fetch failed for {}: {}", path, e);
+            panne = true;
         }
     }
+
+    // Une panne de service n'est pas une absence de paroles : on ne la met pas
+    // en cache, la prochaine demande réessaiera.
+    if panne {
+        if let Err(e) = lrclib {
+            return Err(e);
+        }
+        return Err("Aucun service de paroles disponible pour cette demande".to_string());
+    }
+
+    let _ = LyricsRepository::mark_not_found(&state.pool, &track_id).await;
+    Ok(None)
 }
 
 /// Force un re-fetch en supprimant le cache puis en relançant `get_lyrics`.
@@ -141,4 +174,52 @@ pub async fn refresh_lyrics(
         .map_err(|e| format!("DB delete error : {}", e))?;
 
     get_lyrics(state, path).await
+}
+
+/// Paroles saisies (ou corrigées) à la main par l'utilisateur.
+///
+/// La base garde la version `manual` — elle prime désormais sur la cascade,
+/// le cache étant relu avant toute recherche en ligne. `ecrire_fichier`
+/// dépose en plus un `.lrc` à côté du morceau, pour que les paroles suivent
+/// la fichier quand on la copie ou qu'un autre lecteur la relise.
+#[tauri::command]
+pub async fn save_lyrics(
+    state: State<'_, AppState>,
+    path: String,
+    plain: Option<String>,
+    synced: Option<String>,
+    ecrire_fichier: bool,
+) -> Result<Lyrics, String> {
+    let file_id = find_file_id_by_path(&state.pool, &path)
+        .await
+        .map_err(|e| format!("DB error : {}", e))?
+        .ok_or_else(|| format!("Fichier introuvable en base : {}", path))?;
+
+    let track = LibraryTrackRepository::find_track_view_by_file_id(&state.pool, &file_id)
+        .await
+        .map_err(|e| format!("DB error : {}", e))?
+        .ok_or_else(|| format!("Track introuvable pour ce fichier : {}", path))?;
+
+    let saved = LyricsRepository::upsert(
+        &state.pool,
+        LyricsUpsert {
+            track_id: track.id.clone(),
+            plain,
+            synced,
+            source: LyricsSource::Manual,
+            lrclib_id: None,
+        },
+    )
+    .await
+    .map_err(|e| format!("DB upsert error : {}", e))?;
+
+    if ecrire_fichier {
+        let contenu = saved.synced.clone().or(saved.plain.clone()).unwrap_or_default();
+        if !contenu.trim().is_empty() {
+            sidecar::write_sidecar_lrc(&track.path, &contenu)
+                .map_err(|e| format!("Écriture .lrc : {e}"))?;
+        }
+    }
+
+    Ok(saved)
 }

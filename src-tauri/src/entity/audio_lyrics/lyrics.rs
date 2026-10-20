@@ -9,6 +9,8 @@ use sqlx::FromRow;
 pub enum LyricsSource {
     Sidecar,
     Lrclib,
+    /// Paroles simples de lyrics.ovh, quand LRCLIB n'avait rien.
+    LyricsOvh,
     Manual,
     None,
 }

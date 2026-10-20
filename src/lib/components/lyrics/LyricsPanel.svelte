@@ -3,7 +3,7 @@ import Icon from "@iconify/svelte";
 import { player } from "#lib/stores/player/player.store";
 import { queueState } from "#lib/stores/queue/queueState.store";
 import { lyricsPanelOpened, closeLyricsPanel } from "#lib/stores/lyrics/lyricsPanel.store";
-import { getLyrics, refreshLyrics, type Lyrics } from "#lib/services/lyrics/lyrics.service";
+import { getLyrics, refreshLyrics, saveLyrics, type Lyrics } from "#lib/services/lyrics/lyrics.service";
 import { parseLrc, findActiveLineIndex, type LrcLine } from "#lib/helper/lyrics/lrcParser";
 import { playerService } from "#lib/services/player/player.service";
 import { resolveCoverSrc } from "#lib/helper/tools/coverHelper";
@@ -12,7 +12,7 @@ import NowPlayingCard from "#lib/components/player/NowPlayingCard.svelte";
 import { t } from "#lib/i18n";
 
 // Libellé de la source, comme le mini-lecteur.
-const SOURCES: Record<string, string> = { sidecar: "mini.src_sidecar", lrclib: "mini.src_lrclib", manual: "mini.src_manual" };
+const SOURCES: Record<string, string> = { sidecar: "mini.src_sidecar", lrclib: "mini.src_lrclib", lyricsovh: "mini.src_ovh", manual: "mini.src_manual" };
 
 type Status = "idle" | "loading" | "ready" | "empty" | "error";
 
@@ -20,6 +20,40 @@ let status = $state<Status>("idle");
 let lyrics = $state<Lyrics | null>(null);
 let error = $state<string | null>(null);
 let isRefreshing = $state(false);
+
+// ─── Édition manuelle ───
+let editing = $state(false);
+let draft = $state("");
+let ecrireFichier = $state(true);
+let saving = $state(false);
+let saveError = $state<string | null>(null);
+
+// Une seule ligne `[mm:ss…]` suffit à passer le texte en mode synchronisé.
+const aDesMarques = (t: string) => /\[\d+:\d+(\.\d+)?\]/.test(t);
+
+function ouvrirEdition() {
+    draft = lyrics?.synced || lyrics?.plain || "";
+    saveError = null;
+    editing = true;
+}
+
+async function handleSaveLyrics() {
+    if (!pathFile || saving) return;
+    saving = true;
+    saveError = null;
+    const texte = draft.trim() ? draft : null;
+    const synced = texte && aDesMarques(texte) ? texte : null;
+    const plain = texte && !synced ? texte : null;
+    try {
+        const res = await saveLyrics(pathFile, { plain, synced }, ecrireFichier);
+        applyLyrics(res);
+        editing = false;
+    } catch (e) {
+        saveError = String(e);
+    } finally {
+        saving = false;
+    }
+}
 
 let pathFile = $derived($player?.pathFile ?? null);
 let currentMs = $derived(($player?.jsPosition ?? 0) * 1000);
@@ -148,6 +182,7 @@ async function fetchLyrics(path: string) {
     lyrics = null;
     syncedLines = [];
     lastScrolledIndex = -1;
+    editing = false;
     try {
         const result = await getLyrics(path);
         // Morceau changé entre-temps : ces paroles ne sont plus les bonnes.
@@ -287,6 +322,18 @@ function handleSeekToLine(timeMs: number) {
         </div>
 
         <div class="flex items-center gap-1 shrink-0">
+            {#if (status === "ready" || status === "empty") && pathFile && !editing}
+                <button
+                    type="button"
+                    class="w-8 h-8 rounded-md flex items-center justify-center cursor-pointer
+                           text-white/60 hover:text-white hover:bg-white/10 transition-colors"
+                    onclick={ouvrirEdition}
+                    aria-label={$t("lyrics.edit")}
+                    title={$t("lyrics.edit")}
+                >
+                    <Icon icon="lucide:pencil" width={14} />
+                </button>
+            {/if}
             {#if status === "ready" || status === "empty"}
                 <button
                     type="button"
@@ -361,6 +408,44 @@ function handleSeekToLine(timeMs: number) {
                 >
                     {$t("common.retry")}
                 </button>
+            </div>
+
+        {:else if editing}
+            <div class="flex flex-col h-full py-6 gap-3">
+                <textarea
+                    bind:value={draft}
+                    class="flex-1 min-h-0 w-full resize-none rounded-xl bg-black/40 border border-white/15
+                           p-4 text-sm text-white/90 font-mono leading-relaxed
+                           focus:outline-none focus:border-white/40 scrollbar-app"
+                    placeholder={$t("lyrics.edit_placeholder")}
+                    spellcheck="false"
+                ></textarea>
+                <label class="flex items-center gap-2 text-xs text-white/70 cursor-pointer select-none">
+                    <input type="checkbox" bind:checked={ecrireFichier} class="accent-emerald-500" />
+                    {$t("lyrics.write_file")}
+                </label>
+                {#if saveError}
+                    <p class="text-xs text-red-300 break-words">{saveError}</p>
+                {/if}
+                <div class="flex justify-end gap-2">
+                    <button
+                        type="button"
+                        class="text-xs px-4 py-2 rounded-full cursor-pointer bg-white/10 text-white/80 hover:bg-white/20 transition-colors"
+                        onclick={() => (editing = false)}
+                    >
+                        {$t("common.cancel")}
+                    </button>
+                    <button
+                        type="button"
+                        class="text-xs px-4 py-2 rounded-full cursor-pointer
+                               bg-white/15 backdrop-blur-md text-white hover:bg-white/25
+                               border border-white/15 transition-colors disabled:opacity-50"
+                        disabled={saving}
+                        onclick={handleSaveLyrics}
+                    >
+                        {$t("common.save")}
+                    </button>
+                </div>
             </div>
 
         {:else if status === "empty"}
