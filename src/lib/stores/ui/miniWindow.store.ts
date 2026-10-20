@@ -139,7 +139,14 @@ async function keepOnScreen(width: number, height: number): Promise<void> {
     const maxY = area.position.y + area.size.height - Math.round(height * scale);
     const x = Math.max(area.position.x, Math.min(pos.x, maxX));
     const y = Math.max(area.position.y, Math.min(pos.y, maxY));
-    if (x !== pos.x || y !== pos.y) await win.setPosition(new PhysicalPosition(x, y));
+    if (x !== pos.x || y !== pos.y) {
+      // Wayland laisse le compositeur décider de la place : le « move » du
+      // client n'est jamais acquitté. On tente une seconde, pas plus.
+      await Promise.race([
+        win.setPosition(new PhysicalPosition(x, y)),
+        new Promise((r) => setTimeout(r, 1000)),
+      ]);
+    }
   } catch (e) {
     console.error("[mini-player] keepOnScreen failed:", e);
   }
@@ -242,10 +249,11 @@ function animateMiniHeight(to: number): void {
 export function setMiniExpanded(exp: boolean): void {
   expanded = exp;
   const to = exp ? collapsedH + PANEL_H : collapsedH;
-  // On remonte d'abord si le panneau dépasserait en bas de l'écran.
-  if (exp) void keepOnScreen(MINI_W, to).then(() => animateMiniHeight(to));
+  // Sous Wayland la fenêtre ne se déplace pas elle-même : le recadrage reste
+  // tenté (utile en X11) mais l'animation ne l'attend pas.
+  if (exp) void keepOnScreen(MINI_W, to);
   // Wayland ne rétrécit pas une fenêtre image par image : le repli d'un seul coup.
-  else if (gtkSize) void setH(collapsedH);
+  if (!exp && gtkSize) void setH(collapsedH);
   else animateMiniHeight(to);
 }
 

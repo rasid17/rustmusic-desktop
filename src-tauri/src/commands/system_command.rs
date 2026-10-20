@@ -207,7 +207,18 @@ pub fn set_compact_window_size(
         window
             .run_on_main_thread(move || {
                 use gtk::prelude::{BinExt, GtkWindowExt, WidgetExt};
-                let Ok(gtk_window) = target.gtk_window() else { return };
+                let Ok(gtk_window) = target.gtk_window() else {
+                    log::error!("🪟 gtk_window introuvable pour {}", target.label());
+                    return;
+                };
+                log::info!(
+                    "🪟 compact {} : demande {}x{} (actuel {}x{})",
+                    target.label(),
+                    width.unwrap_or(-1),
+                    height.unwrap_or(-1),
+                    gtk_window.size().0,
+                    gtk_window.size().1
+                );
                 match (width, height) {
                     (Some(w), Some(h)) => {
                         let (cw, ch) = gtk_window.size();
