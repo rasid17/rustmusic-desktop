@@ -1964,6 +1964,7 @@
     "add_folder_failed": "No se puede añadir la carpeta",
     "import_busy": "Ya hay una importación en curso",
     "import_partial": "Importación parcial",
+    "tracks_removed": "{n} pistas quitadas (archivos no encontrados)",
     "import_partial_none": "No se importó ninguna pista",
     "added": "Añadido",
     "added_next": "Se reproducirá a continuación",

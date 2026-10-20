@@ -33,6 +33,8 @@ export type ImportCompletePayload = Cible & {
   total: number;
   duration_ms: number;
   cancelled: boolean;
+  /** Morceaux retirés car leur fichier a quitté le dossier. */
+  removed?: number;
 };
 
 export type ImportProgressPayload = Cible & {
@@ -154,13 +156,21 @@ export const importProgressStore = {
     });
 
     const u4 = await listen<ImportCompletePayload>('import-complete', async (event) => {
-      const { library_id, cancelled } = event.payload;
+      const { library_id, cancelled, removed } = event.payload;
       importWriter.update(state => ({
         ...state,
         cancelled,
         percent: 100,
         elapsedMs: event.payload.duration_ms,
       }));
+
+      if (removed && removed > 0) {
+        toasts.push({
+          type: "info",
+          title: get(t)("notify.tracks_removed").replace("{n}", String(removed.toLocaleString(get(currentLocale)))),
+          duration: 6000,
+        });
+      }
 
       dataCache.invalidateAll();
       libraryContentStore.refresh();

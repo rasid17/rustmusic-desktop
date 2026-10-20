@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
@@ -31,6 +31,7 @@ use crate::repository::library::library_dirs_repository::LibraryDirRepository;
 use crate::repository::library::library_files_repository::LibraryFilesRepository;
 use crate::repository::library::library_track_artist_repository::LibraryTrackArtistRepository;
 use crate::repository::library::library_track_repository::LibraryTrackRepository;
+use crate::repository::queue::queue_track_repository::QueueTrackRepository;
 use crate::{core::audio_analyser::audio_analyser::AudioAnalyser, entity::audio::audio_file::AudioFile};
 use crate::entity::audio::audio_tags::AudioTags;
 use crate::entity::library::library_files::{LibraryFile, LibraryFileCreate};
@@ -203,6 +204,8 @@ pub struct ImportComplete {
     pub duration_ms: u128,
     /// Number of files skipped because of an analysis or DB error.
     pub skipped: usize,
+    /// Tracks removed because their file is gone from this folder.
+    pub removed: usize,
 }
 
 #[derive(Clone, Serialize)]
@@ -289,7 +292,7 @@ pub async fn save_dir_to_library(
             pool_api, &library_dir.id, 0, 0, "cancelled", None,
         ).await;
         let _ = app.emit("import-complete", ImportComplete {
-            library_id, directory, total: 0, cancelled: true, duration_ms: 0, skipped: 0,
+            library_id, directory, total: 0, cancelled: true, duration_ms: 0, skipped: 0, removed: 0,
         });
         return Ok(Vec::new());
     };
@@ -548,6 +551,16 @@ pub async fn save_files_to_library(
 
     //clear old directory
 
+    // ─── Les fichiers disparus du dossier depuis le dernier scan ───
+    // Uniquement si le listage est allé à son bout : un listage interrompu
+    // effacerait des pistes simplement pas encore vues.
+    let retires = match prune_missing_files(pool_api, library_id, &directory, &files).await {
+        Ok(v) => v,
+        Err(e) => {
+            log::warn!("🧹 Tri des fichiers disparus manqué ({directory}) : {e}");
+            Vec::new()
+        }
+    };
 
     // Émettre l'événement de fin au frontend
     let _ = app.emit("import-complete", ImportComplete {
@@ -557,9 +570,52 @@ pub async fn save_files_to_library(
         cancelled: annule,
         duration_ms: elapsed.as_millis(),
         skipped: skipped.len(),
+        removed: retires.len(),
     });
 
     Ok(tracks)
+}
+
+/// Retire les pistes dont le fichier a quitté le dossier fraîchement listé
+/// en entier. Garde-fou anti-bantai : un dossier connu pour beaucoup de
+/// fichiers qui rend soudain un listage vide est un montage qui a mal
+/// tourné (réseau, USB), pas un dossier vidé — on n'y touche pas, et le
+/// circuit `unavailableDirs` préviendra l'utilisateur.
+async fn prune_missing_files(
+    pool: &SqlitePool,
+    library_id: i64,
+    directory: &str,
+    files: &[PathBuf],
+) -> Result<Vec<String>, String> {
+    let connus = LibraryFilesRepository::paths_under(pool, library_id, directory)
+        .await
+        .map_err(|e| format!("lecture de la base : {e}"))?;
+    if connus.is_empty() {
+        return Ok(Vec::new());
+    }
+    if files.is_empty() && connus.len() >= 5 {
+        log::warn!(
+            "📁 {} fichiers connus sous {}, listage vide : montage suspect, rien n'est retiré",
+            connus.len(),
+            directory
+        );
+        return Ok(Vec::new());
+    }
+    let presents: HashSet<String> =
+        files.iter().map(|f| f.to_string_lossy().into_owned()).collect();
+    let manquants: Vec<String> =
+        connus.into_iter().filter(|p| !presents.contains(p.as_str())).collect();
+    if manquants.is_empty() {
+        return Ok(manquants);
+    }
+    LibraryFilesRepository::remove_missing(pool, &manquants)
+        .await
+        .map_err(|e| format!("suppression : {e}"))?;
+    QueueTrackRepository::delete_by_paths(pool, &manquants)
+        .await
+        .map_err(|e| format!("file d'attente : {e}"))?;
+    log::info!("🧹 {} fichiers disparus retirés de la bibliothèque ({})", manquants.len(), directory);
+    Ok(manquants)
 }
 
 
@@ -1086,5 +1142,71 @@ mod tests {
 
         assert_eq!(deux.album_type, "compilation");
         assert_ne!(un.id, deux.id, "un dossier, un album");
+    }
+
+    async fn base() -> SqlitePool {
+        let pool = SqlitePoolOptions::new().max_connections(1)
+            .connect("sqlite::memory:").await.expect("base mémoire");
+        sqlx::migrate!("./SQL/").run(&pool).await.expect("migrations");
+        sqlx::query("INSERT OR IGNORE INTO profil (id, name) VALUES (1, 'Socle')").execute(&pool).await.unwrap();
+        sqlx::query("INSERT OR IGNORE INTO library (id, profil_id, name) VALUES (1, 1, 'test')").execute(&pool).await.unwrap();
+        pool
+    }
+
+    async fn fichier(pool: &SqlitePool, chemin: &str) {
+        sqlx::query("INSERT INTO library_files (library_id, path, filename, status) VALUES (1, ?, ?, 'indexed')")
+            .bind(chemin)
+            .bind(chemin.rsplit('/').next().unwrap_or(chemin))
+            .execute(pool).await.unwrap();
+    }
+
+    async fn compte(pool: &SqlitePool, requete: &'static str) -> i64 {
+        sqlx::query_scalar(requete).fetch_one(pool).await.unwrap()
+    }
+
+    #[tokio::test]
+    async fn retire_les_fichiers_qui_ont_quitte_le_dossier() {
+        let pool = base().await;
+        fichier(&pool, "/mus/a.flac").await;
+        fichier(&pool, "/mus/b.flac").await;
+        fichier(&pool, "/mus/sous/c.flac").await;
+        fichier(&pool, "/autre/d.flac").await;
+        sqlx::query("INSERT INTO queue_tracks (queue_id, profil_id, position, path, title) VALUES ('q1', 1, 0, '/mus/b.flac', 'b')")
+            .execute(&pool).await.unwrap();
+
+        // b.flac a été déplacé hors du dossier ; a et sous/c sont toujours là.
+        let restants = prune_missing_files(&pool, 1, "/mus",
+            &[PathBuf::from("/mus/a.flac"), PathBuf::from("/mus/sous/c.flac")]).await.unwrap();
+        assert_eq!(restants, vec!["/mus/b.flac".to_string()]);
+        assert_eq!(compte(&pool, "SELECT count(*) FROM library_files WHERE path = '/mus/b.flac'").await, 0);
+        assert_eq!(compte(&pool, "SELECT count(*) FROM library_files WHERE path = '/autre/d.flac'").await, 1,
+            "hors du dossier listé : intact");
+        assert_eq!(compte(&pool, "SELECT count(*) FROM queue_tracks WHERE queue_id = 'q1'").await, 0,
+            "la file a lâché le fantôme aussi");
+    }
+
+    #[tokio::test]
+    async fn ne_retire_rien_sur_un_montage_suspect() {
+        let pool = base().await;
+        for i in 0..6 { fichier(&pool, &format!("/nas/m{i}.flac")).await; }
+
+        // Listage vide alors que six fichiers y sont connus : montage réseau
+        // partié, pas un dossier vidé — rien ne doit être retiré.
+        let restants = prune_missing_files(&pool, 1, "/nas", &[]).await.unwrap();
+        assert!(restants.is_empty());
+        assert_eq!(compte(&pool, "SELECT count(*) FROM library_files").await, 6);
+    }
+
+    #[tokio::test]
+    async fn dossier_voisin_a_prefixe_commun_ne_leve_rien() {
+        let pool = base().await;
+        fichier(&pool, "/musique2/x.flac").await;
+
+        // "/musique2" partage son début avec "/musique" : le tri de l'un ne
+        // doit jamais toucher l'autre.
+        let restants = prune_missing_files(&pool, 1, "/musique",
+            &[PathBuf::from("/musique/a.flac")]).await.unwrap();
+        assert!(restants.is_empty());
+        assert_eq!(compte(&pool, "SELECT count(*) FROM library_files").await, 1);
     }
 }

@@ -1964,6 +1964,7 @@
     "add_folder_failed": "Unable to add the folder",
     "import_busy": "An import is already running",
     "import_partial": "Partial import",
+    "tracks_removed": "{n} tracks removed (files not found)",
     "import_partial_none": "No tracks imported",
     "added": "Added",
     "added_next": "Playing next",

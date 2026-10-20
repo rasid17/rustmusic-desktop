@@ -87,6 +87,23 @@ impl QueueTrackRepository {
         Ok(())
     }
 
+    /// Entrées de fichiers retirés de la bibliothèque : la file d'attente ne
+    /// doit plus s'y accrocher, pour aucun profil. Par lots — SQLite borne le
+    /// nombre de variables liées.
+    pub async fn delete_by_paths(pool: &SqlitePool, paths: &[String]) -> Result<(), sqlx::Error> {
+        for lot in paths.chunks(500) {
+            // Que des marqueurs « ? » dans la chaîne dynamique : les chemins
+            // restent liés, rien d'injectable.
+            let signes = vec!["?"; lot.len()].join(",");
+            let mut requete = sqlx::query(sqlx::AssertSqlSafe(format!("DELETE FROM queue_tracks WHERE path IN ({signes})")));
+            for chemin in lot {
+                requete = requete.bind(chemin);
+            }
+            requete.execute(pool).await?;
+        }
+        Ok(())
+    }
+
     pub async fn replace_all(pool: &SqlitePool, profil_id: i64, tracks: Vec<QueueTrack>) -> Result<(), sqlx::Error>
     {
         // On ouvre la transaction !

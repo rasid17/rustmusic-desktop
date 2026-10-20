@@ -46,6 +46,46 @@ impl LibraryFilesRepository {
             .collect())
     }
 
+    /// Chemins indexés d'une bibliothèque rangés sous un dossier (sous-dossiers
+    /// compris). Le tri des fichiers disparus s'en sert pour trouver ce qui ne
+    /// répond plus.
+    pub async fn paths_under<'e, E>(
+        exec: E,
+        library_id: i64,
+        directory: &str,
+    ) -> Result<Vec<String>, sqlx::Error>
+    where
+        E: sqlx::Executor<'e, Database = sqlx::Sqlite>,
+    {
+        let prefix = format!("{}/", directory.trim_end_matches('/'));
+        sqlx::query_scalar(
+            "SELECT path FROM library_files
+             WHERE library_id = ? AND status = 'indexed' AND substr(path, 1, length(?)) = ?",
+        )
+        .bind(library_id)
+        .bind(&prefix)
+        .bind(&prefix)
+        .fetch_all(exec)
+        .await
+    }
+
+    /// Retire des fichiers qui ne sont plus sur le disque. Les clés étrangères
+    /// cascadent vers les pistes, pochettes et playlists. Par lots : SQLite
+    /// borne le nombre de variables liées par requête.
+    pub async fn remove_missing(pool: &sqlx::SqlitePool, paths: &[String]) -> Result<(), sqlx::Error> {
+        for lot in paths.chunks(500) {
+            // Que des marqueurs « ? » dans la chaîne dynamique : les chemins
+            // restent liés, rien d'injectable.
+            let signes = vec!["?"; lot.len()].join(",");
+            let mut requete = sqlx::query(sqlx::AssertSqlSafe(format!("DELETE FROM library_files WHERE path IN ({signes})")));
+            for chemin in lot {
+                requete = requete.bind(chemin);
+            }
+            requete.execute(pool).await?;
+        }
+        Ok(())
+    }
+
     pub async fn insert_library_file<'e, E>(
         exec: E,
         data: LibraryFileCreate,
