@@ -595,9 +595,9 @@ pub async fn run() {
             // avec un menu "Afficher" et "Quitter"
             // Clic gauche sur l'icône = afficher la fenêtre
 
-            let show_item = MenuItemBuilder::with_id("show", "Afficher RustMusic")
+            let show_item = MenuItemBuilder::with_id("show", "Show RustMusic")
                 .build(app)?;
-            let quit_item = MenuItemBuilder::with_id("quit", "Quitter")
+            let quit_item = MenuItemBuilder::with_id("quit", "Quit")
                 .build(app)?;
 
             let tray_menu = MenuBuilder::new(app)

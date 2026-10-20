@@ -21,12 +21,14 @@
     if (from && !from.url.pathname.startsWith("/settings")) rechercheReglages.set("");
   });
 
-  // Retour à la page d'avant les réglages ; à l'accueil si elle n'existe plus.
+  // Retour à la page d'avant les réglages ; à l'accueil si elle est absente
+  // ou mène en boucle (une URL vide ou « réglages » ne navigue nulle part).
   async function back() {
-    // Le moindre imprévu ici ne doit pas laisser l'utilisateur enfermé :
-    // la navigation est tentée quoi qu'il arrive, et tracée pour le diagnostic.
     let url = "/";
-    try { url = settingsReturnUrl(); } catch (e) { console.error("[settings] retour :", e); }
+    try {
+      const retour = settingsReturnUrl();
+      if (retour && !retour.startsWith("/settings")) url = retour;
+    } catch (e) { console.error("[settings] retour :", e); }
     invoke("log_player_event", { message: `Retour réglages → ${url}` }).catch(() => {});
     try {
       await goto(url);

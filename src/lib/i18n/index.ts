@@ -13,12 +13,12 @@ const locales: Record<string, Translations> = { fr, en, es, de, it };
 
 // Store réactif de la langue courante — dérivé du settings store
 const currentLocale = derived(settingsStore, ($settings) => {
-  return $settings.language || 'fr';
+  return $settings.language || 'en';
 });
 
 // Store des traductions courantes
 const translations = derived(currentLocale, ($locale) => {
-  return locales[$locale] || locales['fr'];
+  return locales[$locale] || locales['en'];
 });
 
 /**

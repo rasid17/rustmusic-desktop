@@ -83,7 +83,7 @@ export type AppSettings = {
 };
 
 export const settingsDefaults: AppSettings = {
-  language: 'fr',
+  language: 'en',
   auto_start: 'false',
   minimize_to_tray: 'true',
   show_notifications: 'false',

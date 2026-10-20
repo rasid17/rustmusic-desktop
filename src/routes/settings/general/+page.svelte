@@ -4,21 +4,12 @@
   import { detectOS } from "#lib/helper/tools/osDetection";
   import OptionGroup from "#lib/components/ui/input/OptionGroup.svelte";
   import OptionItem from "#lib/components/ui/input/OptionItem.svelte";
-  import SelectField from "#lib/components/ui/input/SelectField.svelte";
   import ToggleSwitch from "#lib/components/ui/input/ToggleSwitch.svelte";
 
   type Interrupteur = { cle: keyof AppSettings; titre: string; desc: string; motsCles?: string };
 
   const os = detectOS();
   const systeme = os === "macos" ? "macOS" : os === "linux" ? "Linux" : "Windows";
-
-  const languages = [
-    { value: "fr", label: "Français" },
-    { value: "en", label: "English" },
-    { value: "es", label: "Español" },
-    { value: "de", label: "Deutsch" },
-    { value: "it", label: "Italiano" },
-  ];
 
   const groupes = $derived.by((): { titre: string; hint: string; items: Interrupteur[] }[] => {
     const txt = (cle: string) => $t(`settings.${cle}`).replaceAll("{os}", systeme);
@@ -58,17 +49,6 @@
     ];
   });
 </script>
-
-<OptionGroup>
-  <OptionItem title={$t("settings.language")} desc={$t("settings.language_desc")} keywords="language langue">
-    <SelectField
-      value={$settingsStore.language}
-      options={languages}
-      label={$t("settings.language")}
-      onchange={(v) => settingsStore.set("language", v)}
-    />
-  </OptionItem>
-</OptionGroup>
 
 {#each groupes as groupe (groupe.titre)}
   <OptionGroup title={groupe.titre} hint={groupe.hint}>
