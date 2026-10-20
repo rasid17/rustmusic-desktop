@@ -22,22 +22,17 @@
   });
 
   // Retour à la page d'avant les réglages ; à l'accueil si elle n'existe plus.
-  async function back(e?: MouseEvent) {
-    // SONDE TEMPORAIRE (latence du retour, dev seulement) — à retirer.
-    const t0 = performance.now();
-    const attente = e ? Math.round(t0 - e.timeStamp) : -1;
-    const longues: string[] = [];
-    const obs = new PerformanceObserver((l) => l.getEntries().forEach((x) => longues.push(`${Math.round(x.startTime - t0)}ms+${Math.round(x.duration)}`)));
-    if (import.meta.env.DEV) try { obs.observe({ type: "longtask" }); } catch {}
-    const url = settingsReturnUrl();
-    await goto(url).catch(() => goto("/"));
-    const t1 = performance.now();
-    await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
-    const t2 = performance.now();
-    if (import.meta.env.DEV) setTimeout(() => {
-      obs.disconnect();
-      invoke("log_player_event", { message: `⏱ Retour réglages → ${url} : clic traité après ${attente} ms, navigation ${Math.round(t1 - t0)} ms, affichage ${Math.round(t2 - t0)} ms, tâches longues [${longues.join(", ")}]` }).catch(() => {});
-    }, 3000);
+  async function back() {
+    // Le moindre imprévu ici ne doit pas laisser l'utilisateur enfermé :
+    // la navigation est tentée quoi qu'il arrive, et tracée pour le diagnostic.
+    let url = "/";
+    try { url = settingsReturnUrl(); } catch (e) { console.error("[settings] retour :", e); }
+    invoke("log_player_event", { message: `Retour réglages → ${url}` }).catch(() => {});
+    try {
+      await goto(url);
+    } catch {
+      try { await goto("/"); } catch (e) { console.error("[settings] retour échoué :", e); }
+    }
   }
 
   const actif = $derived(page.url.pathname.split("/")[2] ?? "general");
