@@ -42,6 +42,16 @@
   const TAILLES = [30, 50, 100];
   const limitOf = (n: number | null | undefined): Limit => ({ count: n ?? 50, sort: "random", desc: false });
 
+  // Un auto-mix est un mix qui se matérialise et ne se répète pas : même
+  // formulaire, trois réglages de plus, création différente. On ne bascule
+  // qu'à la création — modifier un mix existant en auto-mix changerait sa
+  // nature sous le pied du contenu.
+  let modeAuto = $state(false);
+  let longueur = $state(50);
+  let parArtiste = $state(2);
+  let fraicheur = $state(50);
+  const autoPossible = $derived(mix && playlistId == null);
+
   let name = $state("");
   let colorIndex = $state(0);
   let iconIndex = $state(0);
@@ -227,7 +237,19 @@
         limit: limit.count || limit.sort ? limit : null,
       };
 
-      if (playlistId != null) {
+      if (autoPossible && modeAuto) {
+        const profilId = $profilSelector.profilSelected?.id;
+        if (!profilId) throw new Error($t("smart.no_profile"));
+        await invoke("create_auto_mix", {
+          profilId,
+          name,
+          color,
+          icon: icon.id,
+          rules: { ...pruneGroup(group, vocabulary, fields), limit: null },
+          options: { longueur, par_artiste: parArtiste, fraicheur },
+        });
+        // Le premier tirage est fait par la commande : la playlist naît pleine.
+      } else if (playlistId != null) {
         await invoke("update_smart_playlist", {
           playlistId,
           name,
@@ -285,11 +307,33 @@
                    border-b-2 border-(--rg-bd) focus:border-(--rg-g) outline-none pb-1.5 transition-colors"
           />
           <p class="mt-2.5 flex gap-2 text-[13px] leading-snug text-(--rg-mu) text-pretty">
-            <Icon icon={mix ? "material-symbols:shuffle-rounded" : "lucide:sparkles"} width="15" class="shrink-0 mt-px text-(--rg-g)" />
-            {mix ? $t("mix_view.explain_mix") : $t("mix_view.explain_smart")}
+            <Icon icon={autoPossible && modeAuto ? "lucide:dices" : mix ? "material-symbols:shuffle-rounded" : "lucide:sparkles"} width="15" class="shrink-0 mt-px text-(--rg-g)" />
+            {autoPossible && modeAuto ? $t("auto_mix.explain") : mix ? $t("mix_view.explain_mix") : $t("mix_view.explain_smart")}
           </p>
         </div>
       </div>
+
+      {#if autoPossible}
+        <!-- Quotidien ou auto : deux façons de se renouveler, le choix se voit d'emblée. -->
+        <div class="grid grid-cols-2 gap-2" role="radiogroup" aria-label={$t("auto_mix.mode_label")}>
+          <button type="button" role="radio" aria-checked={!modeAuto} onclick={() => (modeAuto = false)}
+                  class="min-w-0 flex flex-col gap-1 p-3 rounded-xl border text-left cursor-pointer transition-colors
+                         {!modeAuto ? 'border-(--rg-g) bg-(--rg-creux-on)' : 'border-(--rg-bd) bg-(--rg-creux) hover:border-(--rg-bd2)'}">
+            <span class="flex items-center gap-2 text-[13px] font-bold {!modeAuto ? 'text-(--rg-gtx)' : 'text-(--rg-tx)'}">
+              <Icon icon="material-symbols:shuffle-rounded" width="15" />{$t("mix_view.new")}
+            </span>
+            <span class="text-[11.5px] leading-snug text-(--rg-mu)">{$t("auto_mix.mode_daily")}</span>
+          </button>
+          <button type="button" role="radio" aria-checked={modeAuto} onclick={() => (modeAuto = true)}
+                  class="min-w-0 flex flex-col gap-1 p-3 rounded-xl border text-left cursor-pointer transition-colors
+                         {modeAuto ? 'border-(--rg-g) bg-(--rg-creux-on)' : 'border-(--rg-bd) bg-(--rg-creux) hover:border-(--rg-bd2)'}">
+            <span class="flex items-center gap-2 text-[13px] font-bold {modeAuto ? 'text-(--rg-gtx)' : 'text-(--rg-tx)'}">
+              <Icon icon="lucide:dices" width="15" />{$t("auto_mix.title")}
+            </span>
+            <span class="text-[11.5px] leading-snug text-(--rg-mu)">{$t("auto_mix.mode_auto")}</span>
+          </button>
+        </div>
+      {/if}
 
       <div class="grid grid-cols-[auto_1fr] items-center gap-x-5 gap-y-3.5">
         <span class="text-[11px] font-bold uppercase tracking-[0.1em] text-(--rg-mu)">{$t("smart.color")}</span>
@@ -343,8 +387,50 @@
         </div>
       </section>
 
-      {#if mix}
-        <!-- Taille du tirage : le hasard est imposé, seul le nombre se choisit. -->
+      {#if autoPossible && modeAuto}
+        <!-- Les trois réglages qui font un auto-mix : taille, plafond par
+             artiste, équilibre favoris ↔ redécouverte. -->
+        <section class="space-y-5">
+          <div>
+            <h3 class="mb-3 text-[11px] font-bold uppercase tracking-[0.1em] text-(--rg-mu)">{$t("auto_mix.length")}</h3>
+            <div class="flex items-center gap-2 flex-wrap">
+              {#each TAILLES as n (n)}
+                <button type="button" onclick={() => (longueur = n)} aria-pressed={longueur === n}
+                        class="h-9 px-4 rounded-lg text-sm font-semibold tabular-nums cursor-pointer transition-colors
+                               {longueur === n ? 'bg-(--rg-g) text-(--rg-on-g)' : 'bg-(--rg-creux) border border-(--rg-bd) text-(--rg-tx2) hover:border-(--rg-bd2)'}">{n}</button>
+              {/each}
+              <input
+                type="number"
+                min="5"
+                max="500"
+                value={TAILLES.includes(longueur) ? '' : longueur}
+                onchange={(e) => { const v = Number(e.currentTarget.value); if (v >= 5) longueur = Math.min(500, Math.round(v)); }}
+                placeholder={$t("auto_mix.custom")}
+                aria-label={$t("auto_mix.length")}
+                class="h-9 w-24 px-3 rounded-lg text-sm bg-(--rg-champ) border border-(--rg-bd) text-(--rg-tx) outline-none focus:border-(--rg-g)"
+              />
+            </div>
+          </div>
+          <div>
+            <h3 class="mb-3 text-[11px] font-bold uppercase tracking-[0.1em] text-(--rg-mu)">{$t("auto_mix.per_artist")}</h3>
+            <div class="flex items-center gap-2">
+              {#each [1, 2, 3, 4] as n (n)}
+                <button type="button" onclick={() => (parArtiste = n)} aria-pressed={parArtiste === n}
+                        class="h-9 px-4 rounded-lg text-sm font-semibold tabular-nums cursor-pointer transition-colors
+                               {parArtiste === n ? 'bg-(--rg-g) text-(--rg-on-g)' : 'bg-(--rg-creux) border border-(--rg-bd) text-(--rg-tx2) hover:border-(--rg-bd2)'}">{n}</button>
+              {/each}
+            </div>
+          </div>
+          <div>
+            <h3 class="mb-3 text-[11px] font-bold uppercase tracking-[0.1em] text-(--rg-mu)">{$t("auto_mix.freshness")}</h3>
+            <input type="range" min="0" max="100" step="10" bind:value={fraicheur} class="w-full accent-emerald-500" aria-label={$t("auto_mix.freshness")} />
+            <div class="flex justify-between mt-1 text-[11px] text-(--rg-mu)">
+              <span>{$t("auto_mix.fav_first")}</span>
+              <span>{$t("auto_mix.find_first")}</span>
+            </div>
+          </div>
+        </section>
+      {:else if mix}
         <section>
           <h3 class="mb-3 text-[11px] font-bold uppercase tracking-[0.1em] text-(--rg-mu)">{$t("mix_view.size")}</h3>
           <div class="grid grid-cols-3 gap-2">
@@ -418,6 +504,8 @@
           </p>
           {#if mix && compte === 0}
             <p class="mt-1 text-xs text-(--rg-am)">{$t("mix_view.empty_pool")}</p>
+          {:else if autoPossible && modeAuto && compte !== null}
+            <p class="mt-1 text-xs text-(--rg-mu)">{$t("mix_view.drawn").replace("{n}", Math.min(longueur, compte).toLocaleString($currentLocale))}</p>
           {:else if mix && limit.count}
             <p class="mt-1 text-xs text-(--rg-mu)">{$t("mix_view.drawn").replace("{n}", Math.min(limit.count, compte).toLocaleString($currentLocale))}</p>
           {:else if limit.count && compte > limit.count}
@@ -434,8 +522,8 @@
         <button type="button" onclick={enregistrer} disabled={enregistrement}
                 class="h-10 pl-4 pr-5 rounded-xl text-sm font-bold cursor-pointer flex items-center gap-2 bg-(--rg-g) text-(--rg-on-g)
                        hover:brightness-110 transition disabled:opacity-40 disabled:cursor-default">
-          <Icon icon={playlistId != null ? "material-symbols:check-rounded" : mix ? "material-symbols:shuffle-rounded" : "lucide:sparkles"} width="18" />
-          {playlistId != null ? $t("common.save") : mix ? $t("mix_view.create_cta") : $t("smart.create_cta")}
+          <Icon icon={playlistId != null ? "material-symbols:check-rounded" : autoPossible && modeAuto ? "lucide:dices" : mix ? "material-symbols:shuffle-rounded" : "lucide:sparkles"} width="18" />
+          {playlistId != null ? $t("common.save") : autoPossible && modeAuto ? $t("auto_mix.create_cta") : mix ? $t("mix_view.create_cta") : $t("smart.create_cta")}
         </button>
       </div>
     </div>

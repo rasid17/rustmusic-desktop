@@ -2017,6 +2017,23 @@
     "synced": "Synchronisiert",
     "unknown_error": "Unbekannter Fehler"
   },
+  "auto_mix": {
+    "title": "Auto-Mix",
+    "explain": "Ein Mix, der sich materialisiert und nicht wiederholt: die letzten drei Generationen bleiben aus dem Zug.",
+    "mode_label": "Mix-Typ",
+    "mode_daily": "Täglich neue Ziehung, direkt abgespielt.",
+    "mode_auto": "Gespeichert, pro Künstler begrenzt, ohne Wiederholung der letzten Generationen.",
+    "length": "Mix-Länge",
+    "custom": "Andere…",
+    "per_artist": "Maximal Titel pro Künstler",
+    "freshness": "Waage zwischen Favoriten ↔ Neuentdeckung",
+    "fav_first": "Favoriten zuerst",
+    "find_first": "Neuentdeckung zuerst",
+    "create_cta": "Auto-Mix erstellen",
+    "regenerate": "Mix erneuern",
+    "regenerating": "Erneuere…",
+    "result": "{n} Titel aus einem Pool von {p}"
+  },
   "queue_panel": {
     "clear": "Warteschlange leeren",
     "reshuffle": "Erneut mischen",

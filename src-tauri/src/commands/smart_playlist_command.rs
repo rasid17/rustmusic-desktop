@@ -223,3 +223,122 @@ async fn refresh_count(pool: &sqlx::SqlitePool, id: i64, regles: &rules::SmartRu
         .execute(pool)
         .await;
 }
+
+// ─── Auto-mixes ────────────────────────────────────────────────────────────
+
+use crate::core::smart_playlist::auto_mix::{self, MixOptions};
+
+/// Bilan d'une génération : ce qui est sorti du tirage, et l'espace dans
+/// lequel il a puisé — deux chiffres que l'interface peut raconter.
+#[derive(Debug, serde::Serialize)]
+pub struct AutoMixResult {
+    pub total: i64,
+    pub pool: i64,
+}
+
+/// Tire une génération et la matérialise dans `playlist_items`. Partagé par
+/// la création et le renouvellement : une génération est un geste unique,
+/// pas deux chemins qui divergent.
+async fn generer_auto_mix(
+    pool_api: &sqlx::SqlitePool,
+    playlist_id: i64,
+    regles_json: &str,
+    options_json: Option<&str>,
+    recent: Option<&str>,
+) -> Result<AutoMixResult, String> {
+    let regles: rules::SmartRules =
+        serde_json::from_str(regles_json).map_err(|e| format!("Règles : {e}"))?;
+    let opts: MixOptions = options_json
+        .and_then(|j| serde_json::from_str(j).ok())
+        .unwrap_or_default();
+
+    let candidats = auto_mix::candidats(pool_api, &regles).await?;
+    let exclus = auto_mix::exclusions(recent);
+    let graine = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_micros() as u64)
+        .unwrap_or(1);
+    let (choix, pool) = auto_mix::choisir(candidats, &opts, &exclus, graine);
+    let ids: Vec<String> = choix.iter().map(|c| c.library_track_id.clone()).collect();
+
+    let mut tx = pool_api.begin().await.map_err(|e| format!("transaction : {e}"))?;
+    sqlx::query("DELETE FROM playlist_items WHERE playlist_id = ?")
+        .bind(playlist_id)
+        .execute(&mut *tx)
+        .await
+        .map_err(|e| format!("purge : {e}"))?;
+    for (rang, c) in choix.iter().enumerate() {
+        sqlx::query("INSERT INTO playlist_items (playlist_id, library_track_id, sort_index) VALUES (?, ?, ?)")
+            .bind(playlist_id)
+            .bind(&c.library_track_id)
+            .bind(rang as i64)
+            .execute(&mut *tx)
+            .await
+            .map_err(|e| format!("insertion : {e}"))?;
+    }
+    let memoire = auto_mix::memoire_a_jour(recent, &ids);
+    sqlx::query("UPDATE playlists SET mix_recent = ?, track_count = ?, duration = (SELECT COALESCE(SUM(lt.duration), 0) FROM playlist_items pi JOIN library_tracks lt ON lt.id = pi.library_track_id WHERE pi.playlist_id = playlists.id), updated_at = CURRENT_TIMESTAMP WHERE id = ?")
+        .bind(&memoire)
+        .bind(ids.len() as i64)
+        .bind(playlist_id)
+        .execute(&mut *tx)
+        .await
+        .map_err(|e| format!("mémoire : {e}"))?;
+    tx.commit().await.map_err(|e| format!("validation : {e}"))?;
+
+    Ok(AutoMixResult { total: ids.len() as i64, pool: pool as i64 })
+}
+
+/// Crée un auto-mix et tire sa première génération : la playlist n'existe
+/// jamais sans contenu.
+#[tauri::command]
+pub async fn create_auto_mix(
+    state: State<'_, AppState>,
+    profil_id: i64,
+    name: String,
+    color: Option<String>,
+    icon: Option<String>,
+    rules: rules::SmartRules,
+    options: MixOptions,
+) -> Result<i64, String> {
+    rules::build_where(&rules)?;
+    let regles_json = serde_json::to_string(&rules).map_err(|e| format!("Règles : {e}"))?;
+    let options_json = serde_json::to_string(&options).map_err(|e| format!("Réglages : {e}"))?;
+
+    let (id,): (i64,) = sqlx::query_as(
+        "INSERT INTO playlists (profil_id, name, color, icon, is_auto, rules, mix_options, track_count, pinned)
+         VALUES (?, ?, ?, ?, 1, ?, ?, 0, 1)
+         RETURNING id",
+    )
+    .bind(profil_id)
+    .bind(&name)
+    .bind(color.unwrap_or_else(|| "#0ea5e9".to_string()))
+    .bind(icon.unwrap_or_else(|| "lucide:dices"  .to_string()))
+    .bind(&regles_json)
+    .bind(&options_json)
+    .fetch_one(&state.pool)
+    .await
+    .map_err(|e| format!("Création : {e}"))?;
+
+    generer_auto_mix(&state.pool, id, &regles_json, Some(&options_json), None).await?;
+    Ok(id)
+}
+
+/// Renouvelle la génération d'un auto-mix existant.
+#[tauri::command]
+pub async fn regenerate_auto_mix(
+    state: State<'_, AppState>,
+    playlist_id: i64,
+) -> Result<AutoMixResult, String> {
+    let ligne: Option<(Option<String>, Option<String>, Option<String>)> = sqlx::query_as(
+        "SELECT rules, mix_options, mix_recent FROM playlists WHERE id = ? AND is_auto = 1",
+    )
+    .bind(playlist_id)
+    .fetch_optional(&state.pool)
+    .await
+    .map_err(|e| format!("Lecture : {e}"))?;
+
+    let (regles, options, recent) = ligne.ok_or("Auto-mix introuvable")?;
+    let regles = regles.ok_or("Règles absentes")?;
+    generer_auto_mix(&state.pool, playlist_id, &regles, options.as_deref(), recent.as_deref()).await
+}

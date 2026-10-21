@@ -14,6 +14,8 @@ export interface Playlist {
   is_smart: boolean;
   /** Un mix : playlist auto tirée au hasard chaque jour, rangée sur la page Mix. */
   is_mix: boolean;
+  /** Auto-mix : tirage matérialisé, sans répétition des dernières générations. */
+  is_auto: boolean;
   /** Affichée dans la barre latérale. */
   pinned: boolean;
   created_at: string;

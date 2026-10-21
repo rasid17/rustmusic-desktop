@@ -26,6 +26,10 @@ pub struct Playlist {
     /// Playlist auto tirée au hasard chaque jour : un mix, pas une playlist.
     #[serde(default)]
     pub is_mix: bool,
+    /// Auto-mix : règles de mix + tirage matérialisé, renouvelable sans
+    /// répéter les trois dernières générations.
+    #[serde(default)]
+    pub is_auto: bool,
     /// Affichée dans la barre latérale (épinglée).
     #[serde(default = "default_true")]
     pub pinned: bool,

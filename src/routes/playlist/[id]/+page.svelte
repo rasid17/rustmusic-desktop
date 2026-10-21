@@ -8,6 +8,7 @@
   import { t, currentLocale } from "#lib/i18n";
   import { popinStore } from "#lib/stores/ui/popin.store";
   import { playlistStore } from "#lib/stores/playlist/playlist.store";
+  import { toasts } from "#lib/stores/ui/toast.store";
   import { libraryStore } from "#lib/stores/library/library.store";
   import { resetTagCache } from "#lib/config/trackColumns";
   import RoundButton from "#lib/components/ui/button/RoundButton.svelte";
@@ -90,6 +91,31 @@
     }
   }
 
+  // Un auto-mix se renouvelle à la demande : la génération partante rejoint
+  // la mémoire des trois dernières, la page se recharge par le store.
+  let renouvellement = $state(false);
+  async function regenerer() {
+    if (renouvellement) return;
+    renouvellement = true;
+    try {
+      const r = await invoke<{ total: number; pool: number }>("regenerate_auto_mix", { playlistId });
+      toasts.push({
+        type: "success",
+        title: $t("auto_mix.regenerate"),
+        message: $t("auto_mix.result")
+          .replace("{n}", r.total.toLocaleString($currentLocale))
+          .replace("{p}", r.pool.toLocaleString($currentLocale)),
+        duration: 5000,
+      });
+      await playlistStore.refresh();
+    } catch (e) {
+      console.error("[playlist] renouvellement :", e);
+      toasts.push({ type: "error", title: $t("auto_mix.regenerate"), message: String(e) });
+    } finally {
+      renouvellement = false;
+    }
+  }
+
   async function remove(track: TrackListView) {
     const itemId = itemIds.get(track.id);
     if (itemId == null) return;
@@ -137,7 +163,7 @@
 {:else}
   <PlaylistTracksView
     title={shown.name}
-    kicker={shown.is_smart ? $t("playlist.new_smart") : $t("home.playlist")}
+    kicker={shown.is_auto ? $t("auto_mix.title") : shown.is_smart ? $t("playlist.new_smart") : $t("home.playlist")}
     subtitle={rules}
     color={shown.color}
     icon={shown.icon}
@@ -150,6 +176,11 @@
     removeLabel={$t("playlist_page.remove_playlist")}
   >
     {#snippet actions()}
+      {#if shown.is_auto}
+        <RoundButton icon="material-symbols:shuffle-rounded"
+                     title={renouvellement ? $t("auto_mix.regenerating") : $t("auto_mix.regenerate")}
+                     onclick={regenerer} />
+      {/if}
       <!-- Une playlist auto se modifie par ses règles, pas par sa liste. -->
       <RoundButton icon={shown?.is_smart ? "lucide:sparkles" : "material-symbols:edit-outline-rounded"}
                    title={shown?.is_smart ? $t("playlist_page.rules") : $t("playlist_page.modify")} onclick={edit} />

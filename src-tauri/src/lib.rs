@@ -14,7 +14,7 @@ use tauri::menu::{MenuBuilder, MenuItemBuilder};
 use tauri::Manager;
 use simplelog::{CombinedLogger, ColorChoice, TermLogger, TerminalMode, WriteLogger, LevelFilter, ConfigBuilder};
 
-use crate::commands::smart_playlist_command::{count_smart_playlist, create_smart_playlist, get_rule_vocabulary, get_smart_playlist_rules, preview_smart_playlist, update_smart_playlist};
+use crate::commands::smart_playlist_command::{count_smart_playlist, create_auto_mix, create_smart_playlist, get_rule_vocabulary, get_smart_playlist_rules, preview_smart_playlist, regenerate_auto_mix, update_smart_playlist};
 use crate::commands::playlist_view_command::{get_playlist_tracks_view, get_tracks_view_by_paths};
 use crate::commands::export_command::{export_settings_and_playlists, import_settings_and_playlists, preview_import};
 use crate::commands::pin_command::{get_library_pins, pin_album, pin_artist, unpin_album, unpin_artist};
@@ -856,6 +856,8 @@ pub async fn run() {
             count_smart_playlist,
             preview_smart_playlist,
             create_smart_playlist,
+            create_auto_mix,
+            regenerate_auto_mix,
             update_smart_playlist,
             get_smart_playlist_rules,
             import_settings_and_playlists,

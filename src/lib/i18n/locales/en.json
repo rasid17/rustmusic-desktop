@@ -2017,6 +2017,23 @@
     "synced": "Synced",
     "unknown_error": "Unknown error"
   },
+  "auto_mix": {
+    "title": "Auto-mix",
+    "explain": "A mix that materialises and never repeats itself: the last three generations are kept out of the draw.",
+    "mode_label": "Mix type",
+    "mode_daily": "Fresh draw every day, played on the fly.",
+    "mode_auto": "Stored, capped per artist, no repeats from recent generations.",
+    "length": "Mix length",
+    "custom": "Other…",
+    "per_artist": "Maximum tracks per artist",
+    "freshness": "Favourites ↔ rediscovery balance",
+    "fav_first": "Favourites first",
+    "find_first": "Rediscovery first",
+    "create_cta": "Create auto-mix",
+    "regenerate": "Renew the mix",
+    "regenerating": "Renewing…",
+    "result": "{n} tracks drawn from a pool of {p}"
+  },
   "queue_panel": {
     "clear": "Clear queue",
     "reshuffle": "Re-shuffle",
