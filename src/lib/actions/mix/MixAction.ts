@@ -7,7 +7,7 @@ import { t, currentLocale } from "#lib/i18n";
 import { popinStore } from "#lib/stores/ui/popin.store";
 import { playlistStore } from "#lib/stores/playlist/playlist.store";
 import { toasts } from "#lib/stores/ui/toast.store";
-import { renew } from "#lib/stores/mix/mix.store";
+import { forget, renew } from "#lib/stores/mix/mix.store";
 import { PLAYLIST_COLORS } from "#lib/components/playlist/playlistConfig";
 import SmartPlaylistPopin from "#lib/components/playlist/smart/SmartPlaylistPopin.svelte";
 import type { ActionMix } from "#lib/components/mix/MixCard.svelte";
@@ -22,12 +22,35 @@ export function actionsMix(spec: SpecMix, libraryId: number): ActionMix[] {
   ];
   const p = spec.playlist;
   if (p) {
+    // Un auto-mix est rangé dans la base : vider le cache du jour ne changerait
+    // rien de visible, il faut relancer le tirage lui-même.
+    if (p.is_auto) actions[0] = { ...actions[0], agir: () => regenerer(p.id, p.name) };
     actions.push(
       { icone: "material-symbols:tune-rounded", libelle: tr("mix_view.edit"), agir: () => editMix(p.id) },
       { icone: "material-symbols:delete-outline-rounded", libelle: tr("mix_view.delete"), danger: true, agir: () => deleteMix(p.id, p.name) },
     );
   }
   return actions;
+}
+
+/** Retire une génération d'un auto-mix et en prévient le chiffre. */
+async function regenerer(id: number, nom: string) {
+  const tr = get(t);
+  try {
+    const r = await invoke<{ total: number; pool: number }>("regenerate_auto_mix", { playlistId: id });
+    forget(`perso:${id}`);
+    await playlistStore.refresh();
+    toasts.push({
+      type: "success",
+      title: nom,
+      message: tr("auto_mix.result")
+        .replace("{n}", r.total.toLocaleString(get(currentLocale)))
+        .replace("{p}", r.pool.toLocaleString(get(currentLocale))),
+      duration: 5000,
+    });
+  } catch (e) {
+    toasts.push({ type: "error", title: nom, message: String(e) });
+  }
 }
 
 export const playMix = (liste: TrackListView[]) => handleTracksPlay(liste);

@@ -43,14 +43,18 @@
   const limitOf = (n: number | null | undefined): Limit => ({ count: n ?? 50, sort: "random", desc: false });
 
   // Un auto-mix est un mix qui se matérialise et ne se répète pas : même
-  // formulaire, trois réglages de plus, création différente. On ne bascule
-  // qu'à la création — modifier un mix existant en auto-mix changerait sa
-  // nature sous le pied du contenu.
+  // formulaire, trois réglages de plus, enregistrement différent. Le choix du
+  // mode ne se propose qu'à la création — convertir un mix existant changerait
+  // sa nature sous le pied de son contenu.
   let modeAuto = $state(false);
   let longueur = $state(50);
   let parArtiste = $state(2);
   let fraicheur = $state(50);
-  const autoPossible = $derived(mix && playlistId == null);
+  const estAuto = $derived(!!$playlistStore.playlists.find((p) => p.id === playlistId)?.is_auto);
+  const choixMode = $derived(mix && playlistId == null);
+  // Les réglages auto se montrent et se réenregistrent dès que la playlist en
+  // est un : à la création selon le choix, à la modification selon sa nature.
+  const autoActif = $derived(mix && (playlistId == null ? modeAuto : estAuto));
 
   let name = $state("");
   let colorIndex = $state(0);
@@ -125,6 +129,24 @@
           if (ci >= 0) colorIndex = ci;
           const ii = PLAYLIST_ICONS.findIndex((x) => x.id === existante.icon);
           if (ii >= 0) iconIndex = ii;
+        }
+
+        // Un auto-mix range aussi ses réglages propres : les ignorer ramènerait
+        // un mix de 200 morceaux à 50 dès qu'on touche une seule condition.
+        if (existante?.is_auto) {
+          try {
+            const reglages = await invoke<{ longueur: number; par_artiste: number; fraicheur: number } | null>(
+              "get_auto_mix_options",
+              { playlistId },
+            );
+            if (reglages) {
+              longueur = reglages.longueur;
+              parArtiste = reglages.par_artiste;
+              fraicheur = reglages.fraicheur;
+            }
+          } catch (e) {
+            console.error("[smart] réglages du mix auto :", e);
+          }
         }
       }
 
@@ -237,7 +259,13 @@
         limit: limit.count || limit.sort ? limit : null,
       };
 
-      if (autoPossible && modeAuto) {
+      // Un auto-mix se matérialise : ses réglages propres passent par une
+      // commande qui relance le tirage dans la foulée. Le `limit` des règles n'a
+      // plus son mot à dire, c'est `longueur` qui décide.
+      const reglesAuto = { ...pruneGroup(group, vocabulary, fields), limit: null };
+      const optionsAuto = { longueur, par_artiste: parArtiste, fraicheur };
+
+      if (autoActif && playlistId == null) {
         const profilId = $profilSelector.profilSelected?.id;
         if (!profilId) throw new Error($t("smart.no_profile"));
         await invoke("create_auto_mix", {
@@ -245,10 +273,20 @@
           name,
           color,
           icon: icon.id,
-          rules: { ...pruneGroup(group, vocabulary, fields), limit: null },
-          options: { longueur, par_artiste: parArtiste, fraicheur },
+          rules: reglesAuto,
+          options: optionsAuto,
         });
         // Le premier tirage est fait par la commande : la playlist naît pleine.
+      } else if (autoActif) {
+        await invoke("update_auto_mix", {
+          playlistId,
+          name,
+          color,
+          icon: icon.id,
+          rules: reglesAuto,
+          options: optionsAuto,
+        });
+        forget(`perso:${playlistId}`);
       } else if (playlistId != null) {
         await invoke("update_smart_playlist", {
           playlistId,
@@ -307,13 +345,13 @@
                    border-b-2 border-(--rg-bd) focus:border-(--rg-g) outline-none pb-1.5 transition-colors"
           />
           <p class="mt-2.5 flex gap-2 text-[13px] leading-snug text-(--rg-mu) text-pretty">
-            <Icon icon={autoPossible && modeAuto ? "lucide:dices" : mix ? "material-symbols:shuffle-rounded" : "lucide:sparkles"} width="15" class="shrink-0 mt-px text-(--rg-g)" />
-            {autoPossible && modeAuto ? $t("auto_mix.explain") : mix ? $t("mix_view.explain_mix") : $t("mix_view.explain_smart")}
+            <Icon icon={autoActif ? "lucide:dices" : mix ? "material-symbols:shuffle-rounded" : "lucide:sparkles"} width="15" class="shrink-0 mt-px text-(--rg-g)" />
+            {autoActif ? $t("auto_mix.explain") : mix ? $t("mix_view.explain_mix") : $t("mix_view.explain_smart")}
           </p>
         </div>
       </div>
 
-      {#if autoPossible}
+      {#if choixMode}
         <!-- Quotidien ou auto : deux façons de se renouveler, le choix se voit d'emblée. -->
         <div class="grid grid-cols-2 gap-2" role="radiogroup" aria-label={$t("auto_mix.mode_label")}>
           <button type="button" role="radio" aria-checked={!modeAuto} onclick={() => (modeAuto = false)}
@@ -387,7 +425,7 @@
         </div>
       </section>
 
-      {#if autoPossible && modeAuto}
+      {#if autoActif}
         <!-- Les trois réglages qui font un auto-mix : taille, plafond par
              artiste, équilibre favoris ↔ redécouverte. -->
         <section class="space-y-5">
@@ -504,7 +542,7 @@
           </p>
           {#if mix && compte === 0}
             <p class="mt-1 text-xs text-(--rg-am)">{$t("mix_view.empty_pool")}</p>
-          {:else if autoPossible && modeAuto && compte !== null}
+          {:else if autoActif && compte !== null}
             <p class="mt-1 text-xs text-(--rg-mu)">{$t("mix_view.drawn").replace("{n}", Math.min(longueur, compte).toLocaleString($currentLocale))}</p>
           {:else if mix && limit.count}
             <p class="mt-1 text-xs text-(--rg-mu)">{$t("mix_view.drawn").replace("{n}", Math.min(limit.count, compte).toLocaleString($currentLocale))}</p>
@@ -522,8 +560,8 @@
         <button type="button" onclick={enregistrer} disabled={enregistrement}
                 class="h-10 pl-4 pr-5 rounded-xl text-sm font-bold cursor-pointer flex items-center gap-2 bg-(--rg-g) text-(--rg-on-g)
                        hover:brightness-110 transition disabled:opacity-40 disabled:cursor-default">
-          <Icon icon={playlistId != null ? "material-symbols:check-rounded" : autoPossible && modeAuto ? "lucide:dices" : mix ? "material-symbols:shuffle-rounded" : "lucide:sparkles"} width="18" />
-          {playlistId != null ? $t("common.save") : autoPossible && modeAuto ? $t("auto_mix.create_cta") : mix ? $t("mix_view.create_cta") : $t("smart.create_cta")}
+          <Icon icon={playlistId != null ? "material-symbols:check-rounded" : autoActif ? "lucide:dices" : mix ? "material-symbols:shuffle-rounded" : "lucide:sparkles"} width="18" />
+          {playlistId != null ? $t("common.save") : autoActif ? $t("auto_mix.create_cta") : mix ? $t("mix_view.create_cta") : $t("smart.create_cta")}
         </button>
       </div>
     </div>

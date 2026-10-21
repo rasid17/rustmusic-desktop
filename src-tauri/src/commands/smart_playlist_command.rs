@@ -193,8 +193,11 @@ pub async fn get_smart_playlist_rules(
     state: State<'_, AppState>,
     playlist_id: i64,
 ) -> Result<Option<rules::SmartRules>, String> {
+    // Un auto-mix garde ses règles pour les prochaines générations : elles ne
+    // le définissent pas tant qu'il est vide, mais elles doivent être relues
+    // pour qu'on puisse le modifier sans repartir de zéro.
     let json: Option<String> =
-        sqlx::query_scalar("SELECT rules FROM playlists WHERE id = ? AND is_smart = 1")
+        sqlx::query_scalar("SELECT rules FROM playlists WHERE id = ? AND (is_smart = 1 OR is_auto = 1)")
             .bind(playlist_id)
             .fetch_optional(&state.pool)
             .await
@@ -305,9 +308,13 @@ pub async fn create_auto_mix(
     let regles_json = serde_json::to_string(&rules).map_err(|e| format!("Règles : {e}"))?;
     let options_json = serde_json::to_string(&options).map_err(|e| format!("Réglages : {e}"))?;
 
+    // `is_mix` sans `is_smart` : le tirage est rangé dans `playlist_items`, mais
+    // la playlist vit sur la page Mix et non dans la liste des playlists. Laisser
+    // `is_smart` à 0 est ce qui empêche la vue de recalculer le contenu à partir
+    // des règles et donc d'oublier la mémoire des générations passées.
     let (id,): (i64,) = sqlx::query_as(
-        "INSERT INTO playlists (profil_id, name, color, icon, is_auto, rules, mix_options, track_count, pinned)
-         VALUES (?, ?, ?, ?, 1, ?, ?, 0, 1)
+        "INSERT INTO playlists (profil_id, name, color, icon, is_auto, is_mix, rules, mix_options, track_count, pinned)
+         VALUES (?, ?, ?, ?, 1, 1, ?, ?, 0, 0)
          RETURNING id",
     )
     .bind(profil_id)
@@ -341,4 +348,96 @@ pub async fn regenerate_auto_mix(
     let (regles, options, recent) = ligne.ok_or("Auto-mix introuvable")?;
     let regles = regles.ok_or("Règles absentes")?;
     generer_auto_mix(&state.pool, playlist_id, &regles, options.as_deref(), recent.as_deref()).await
+}
+
+/// Les réglages d'un auto-mix : le formulaire ne doit pas les repasser en
+/// silence aux valeurs par défaut au premier enregistrement.
+#[tauri::command]
+pub async fn get_auto_mix_options(
+    state: State<'_, AppState>,
+    playlist_id: i64,
+) -> Result<Option<MixOptions>, String> {
+    let json = sqlx::query_scalar::<_, Option<String>>(
+        "SELECT mix_options FROM playlists WHERE id = ? AND is_auto = 1",
+    )
+    .bind(playlist_id)
+    .fetch_optional(&state.pool)
+    .await
+    .map_err(|e| format!("Lecture : {e}"))?
+    .flatten();
+
+    match json {
+        Some(j) => serde_json::from_str(&j)
+            .map(Some)
+            .map_err(|e| format!("Réglages illisibles : {e}")),
+        None => Ok(None),
+    }
+}
+
+/// Réécrit les règles et les réglages d'un auto-mix, puis relance le tirage :
+/// le contenu suit la demande, sinon la page resterait pleine du tirage
+/// précédent.
+///
+/// `update_smart_playlist` ne convient pas ici : il pose `is_smart = 1`, ce qui
+/// ferait calculer le contenu par les règles — le tirage matérialisé et la
+/// mémoire des générations deviendraient inutiles.
+#[tauri::command]
+pub async fn update_auto_mix(
+    state: State<'_, AppState>,
+    playlist_id: i64,
+    name: Option<String>,
+    color: Option<String>,
+    icon: Option<String>,
+    rules: rules::SmartRules,
+    options: Option<MixOptions>,
+) -> Result<AutoMixResult, String> {
+    rules::build_where(&rules)?;
+
+    let regles_json = serde_json::to_string(&rules).map_err(|e| format!("Règles : {e}"))?;
+    let options_json = match &options {
+        Some(o) => Some(serde_json::to_string(o).map_err(|e| format!("Réglages : {e}"))?),
+        None => None,
+    };
+
+    let ligne: Option<(Option<String>, Option<String>)> = sqlx::query_as(
+        "SELECT mix_recent, mix_options FROM playlists WHERE id = ? AND is_auto = 1",
+    )
+    .bind(playlist_id)
+    .fetch_optional(&state.pool)
+    .await
+    .map_err(|e| format!("Lecture : {e}"))?;
+    let (recent, options_ranges) = ligne.ok_or_else(|| "Auto-mix introuvable".to_string())?;
+
+    sqlx::query(
+        "UPDATE playlists SET
+             name  = COALESCE(?, name),
+             color = COALESCE(?, color),
+             icon  = COALESCE(?, icon),
+             rules = ?,
+             mix_options = COALESCE(?, mix_options),
+             is_smart = 0,
+             is_mix = 1,
+             updated_at = CURRENT_TIMESTAMP
+         WHERE id = ? AND is_auto = 1",
+    )
+    .bind(&name)
+    .bind(&color)
+    .bind(&icon)
+    .bind(&regles_json)
+    .bind(&options_json)
+    .bind(playlist_id)
+    .execute(&state.pool)
+    .await
+    .map_err(|e| format!("Mise à jour : {e}"))?;
+
+    // Sans réglages fournis, on garde ceux qui sont rangés : autrement une
+    // modification de règles ramènerait le mix à cinquante morceaux.
+    generer_auto_mix(
+        &state.pool,
+        playlist_id,
+        &regles_json,
+        options_json.as_deref().or(options_ranges.as_deref()),
+        recent.as_deref(),
+    )
+    .await
 }

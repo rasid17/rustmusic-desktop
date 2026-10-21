@@ -10,6 +10,7 @@
   import { playlistStore } from "#lib/stores/playlist/playlist.store";
   import { toasts } from "#lib/stores/ui/toast.store";
   import { libraryStore } from "#lib/stores/library/library.store";
+  import { forget } from "#lib/stores/mix/mix.store";
   import { resetTagCache } from "#lib/config/trackColumns";
   import RoundButton from "#lib/components/ui/button/RoundButton.svelte";
   import PageState from "#lib/components/ui/layout/PageState.svelte";
@@ -69,7 +70,7 @@
       playlist = p;
       tracks = view ?? [];
       itemIds = new Map((items ?? []).map((x) => [x.library_track_id, x.playlist_item_id]));
-      rules = p.is_smart ? await loadRules(id) : null;
+      rules = p.is_smart || p.is_auto ? await loadRules(id) : null;
     } catch (e) {
       if (n === run) failed = true;
       console.error("[playlist] chargement :", e);
@@ -99,6 +100,9 @@
     renouvellement = true;
     try {
       const r = await invoke<{ total: number; pool: number }>("regenerate_auto_mix", { playlistId });
+      // La carte du même mix, sur la page Mix, garde la génération précédente
+      // tant que son tirage du jour est en cache.
+      forget(`perso:${playlistId}`);
       toasts.push({
         type: "success",
         title: $t("auto_mix.regenerate"),
@@ -128,11 +132,20 @@
     }
   }
 
+  // Un auto-mix se règle comme une playlist intelligente, bien qu'il ne se
+  // calcule pas à la volée : ses règles sont rangées pour le tirage suivant.
+  const seRegle = $derived(!!shown && (shown.is_smart || shown.is_auto));
+
   function edit() {
     const p = shown;
     if (!p) return;
-    if (p.is_smart) {
-      popinStore.open($t("playlist.new_smart"), SmartPlaylistPopin, { playlistId: p.id }, { size: "xl", icon: "lucide:sparkles", flush: true });
+    if (p.is_smart || p.is_auto) {
+      popinStore.open(
+        p.is_mix ? $t("mix_view.edit") : $t("playlist.new_smart"),
+        SmartPlaylistPopin,
+        { playlistId: p.id, mix: p.is_mix },
+        { size: "xl", icon: p.is_mix ? "material-symbols:shuffle-rounded" : "lucide:sparkles", flush: true },
+      );
     } else {
       popinStore.open($t("playlist_page.edit_playlist"), EditPlaylistPopin, { playlist: p });
     }
@@ -182,11 +195,14 @@
                      onclick={regenerer} />
       {/if}
       <!-- Une playlist auto se modifie par ses règles, pas par sa liste. -->
-      <RoundButton icon={shown?.is_smart ? "lucide:sparkles" : "material-symbols:edit-outline-rounded"}
-                   title={shown?.is_smart ? $t("playlist_page.rules") : $t("playlist_page.modify")} onclick={edit} />
-      <RoundButton icon={pinned ? "material-symbols:keep-rounded" : "material-symbols:keep-outline-rounded"}
-                   title={pinned ? $t("sidebar.unpin") : $t("sidebar.pin")}
-                   onclick={() => playlistStore.setPinned(playlistId, !pinned)} />
+      <RoundButton icon={seRegle ? "lucide:sparkles" : "material-symbols:edit-outline-rounded"}
+                   title={seRegle ? $t("playlist_page.rules") : $t("playlist_page.modify")} onclick={edit} />
+      <!-- Un mix ne s'épingle pas : il vit sur la page Mix, pas dans la barre latérale. -->
+      {#if !shown.is_mix}
+        <RoundButton icon={pinned ? "material-symbols:keep-rounded" : "material-symbols:keep-outline-rounded"}
+                     title={pinned ? $t("sidebar.unpin") : $t("sidebar.pin")}
+                     onclick={() => playlistStore.setPinned(playlistId, !pinned)} />
+      {/if}
       <RoundButton icon="material-symbols:delete-outline-rounded" title={$t("playlist_page.delete_playlist")} onclick={() => (confirmDelete = true)} />
     {/snippet}
   </PlaylistTracksView>

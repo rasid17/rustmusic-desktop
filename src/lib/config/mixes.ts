@@ -72,12 +72,14 @@ export function decadeMixes(albums: AlbumListView[], t: T): SpecMix[] {
     });
 }
 
-/** Les mix créés : des playlists auto marquées « mix ». */
+/** Les mix créés : rangés sur la page Mix, qu'ils se recalculent ou se matérialisent. */
 export function createdMixes(playlists: Playlist[], t: T): SpecMix[] {
   return playlists
     .filter((p) => p.is_mix)
     .map((p) => ({
-      cle: `perso:${p.id}`, type: t("mix_view.custom_kind"), nom: p.name, aide: p.name, h: hue(p.name),
+      cle: `perso:${p.id}`,
+      type: p.is_auto ? t("auto_mix.title") : t("mix_view.custom_kind"),
+      nom: p.name, aide: p.name, h: hue(p.name),
       source: { playlistId: p.id }, playlist: p,
     }));
 }

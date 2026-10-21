@@ -12,7 +12,6 @@
   import VersionCard from "#lib/components/settings/VersionCard.svelte";
   import { settingsReturnUrl } from "#lib/stores/ui/settingsReturn.store";
   import type { Snippet } from "svelte";
-  import { invoke } from "@tauri-apps/api/core";
 
   let { children }: { children: Snippet } = $props();
 
@@ -29,7 +28,6 @@
       const retour = settingsReturnUrl();
       if (retour && !retour.startsWith("/settings")) url = retour;
     } catch (e) { console.error("[settings] retour :", e); }
-    invoke("log_player_event", { message: `Retour réglages → ${url}` }).catch(() => {});
     try {
       await goto(url);
     } catch {
