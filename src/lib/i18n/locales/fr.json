@@ -2019,6 +2019,7 @@
   },
   "queue_panel": {
     "clear": "Vider la file",
+    "reshuffle": "Re-mélanger",
     "close": "Fermer la file d'attente",
     "empty_desc": "Lancez une musique depuis votre bibliothèque pour remplir la file.",
     "empty_title": "Rien à écouter",

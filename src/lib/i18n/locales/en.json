@@ -2019,6 +2019,7 @@
   },
   "queue_panel": {
     "clear": "Clear queue",
+    "reshuffle": "Re-shuffle",
     "close": "Close the queue",
     "empty_desc": "Play something from your library to fill the queue.",
     "empty_title": "Nothing to play",

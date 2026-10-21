@@ -6,6 +6,7 @@ import { profilSelector } from "../profil/profil.store";
 import { player } from "../player/player.store";
 import type { AudioFile } from "#lib/types/db/audioFile/AudioFile";
 import { orderForPlayback } from "#lib/mapper/queue/mapQueueTrack";
+import { fairShuffle, newShuffleSeed } from "#lib/helper/tools/fairShuffle";
 
 // L'ID du profil par défaut (tu pourras le rendre dynamique plus tard)
 let currentProfilId = 1;
@@ -56,16 +57,6 @@ function enregistrerFile(liste: QueueTrack[], currentIndex: number) {
             console.error("❌ Erreur SQLite lors du chargement de la file :", err);
         }
     });
-}
-
-// Fisher-Yates shuffle — mélange en place, O(n)
-function shuffleArray<T>(arr: T[]): T[] {
-    const a = [...arr];
-    for (let i = a.length - 1; i > 0; i--) {
-        const j = Math.floor(Math.random() * (i + 1));
-        [a[i], a[j]] = [a[j], a[i]];
-    }
-    return a;
 }
 
 export const queueState = {
@@ -298,10 +289,14 @@ export const queueState = {
         const currentTrackId = qs.currentIndex > -1 ? qs.tracks[qs.currentIndex]?.queueId : null;
 
         if (isShuffled) {
-            // ON → sauvegarder l'ordre original, mélanger, garder la piste en cours en index 0
-            originalTracks = [...qs.tracks];
+            // ON → sauvegarder l'ordre original (une seule fois : un nouveau
+            // tirage par-dessus un shuffle ne doit pas perdre l'ordre d'avant ;
+            // mais une file modifiée depuis — ajout, retrait — devient la base).
+            if (!qs.isShuffled || !originalTracks || originalTracks.length !== qs.tracks.length) {
+                originalTracks = [...qs.tracks];
+            }
 
-            let shuffled = shuffleArray(qs.tracks);
+            let shuffled = fairShuffle(originalTracks, newShuffleSeed());
 
             // Placer la piste en cours en première position
             if (currentTrackId) {
@@ -362,6 +357,11 @@ export const queueState = {
                 }
             }
         }
+    },
+    /** Nouveau tirage sur la même base : le bouton « re-mélanger » de la file. */
+    reshuffle: async () => {
+        if (!get(queueStateWritable).isShuffled) return;
+        await queueState.setIsShuffled(true);
     },
     setRepeatMode: async (repeatMode: QueueState["repeatMode"]) => {
         queueStateWritable.update((qs) => ({ ...qs, repeatMode }))

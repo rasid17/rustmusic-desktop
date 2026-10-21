@@ -198,6 +198,24 @@ function handleRelease() {
             class="text-emerald-500 {status !== 'playing' ? 'ml-0.5' : ''}" />
         </button>
       {/if}
+      {#if $queueState.isShuffled && queueTrackList.length > 1}
+        <button
+          type="button"
+          onclick={() => queueState.reshuffle()}
+          class="group flex items-center justify-center h-9 w-9
+                 rounded-xl
+                 bg-neutral-100 dark:bg-white/5
+                 hover:bg-emerald-50 dark:hover:bg-emerald-500/15
+                 border border-transparent hover:border-emerald-200/50 dark:hover:border-emerald-500/20
+                 transition-all duration-200"
+          aria-label={$t("queue_panel.reshuffle")}
+          title={$t("queue_panel.reshuffle")}
+        >
+          <Icon icon="lucide:shuffle" width="15" height="15"
+            class="text-neutral-400 group-hover:text-emerald-600 dark:group-hover:text-emerald-400
+                   transition-colors duration-200 cursor-pointer" />
+        </button>
+      {/if}
       {#if queueTrackList.length > 0}
         <button
           type="button"

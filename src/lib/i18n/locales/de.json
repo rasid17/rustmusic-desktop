@@ -2019,6 +2019,7 @@
   },
   "queue_panel": {
     "clear": "Warteschlange leeren",
+    "reshuffle": "Erneut mischen",
     "close": "Warteschlange schließen",
     "empty_desc": "Starte Musik aus deiner Bibliothek, um die Warteschlange zu füllen.",
     "empty_title": "Nichts zu hören",

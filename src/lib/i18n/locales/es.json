@@ -2019,6 +2019,7 @@
   },
   "queue_panel": {
     "clear": "Vaciar la cola",
+    "reshuffle": "Volver a mezclar",
     "close": "Cerrar la cola",
     "empty_desc": "Reproduce música de tu biblioteca para llenar la cola.",
     "empty_title": "Nada que escuchar",

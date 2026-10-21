@@ -2019,6 +2019,7 @@
   },
   "queue_panel": {
     "clear": "Svuota la coda",
+    "reshuffle": "Rimescola",
     "close": "Chiudi la coda",
     "empty_desc": "Avvia un brano dalla tua libreria per riempire la coda.",
     "empty_title": "Niente da ascoltare",
