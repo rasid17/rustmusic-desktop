@@ -239,4 +239,41 @@ impl LibraryArtistRepository {
         Ok(artist)
     }
 
+    /// Artistes d'une bibliothèque qui ne figurent plus sur aucune piste ni
+    /// aucun album. Les artistes visibles seulement comme invités sont
+    /// conservés grâce à `library_track_artists` / `library_album_artists`.
+    pub async fn delete_orphans(
+        pool: &sqlx::SqlitePool,
+        library_id: i64,
+    ) -> Result<u64, sqlx::Error> {
+        let result = sqlx::query(
+            "DELETE FROM library_artists
+             WHERE library_id = ?
+               AND NOT EXISTS (
+                   SELECT 1 FROM library_tracks lt
+                   WHERE lt.library_id = library_artists.library_id
+                     AND lt.artist_id = library_artists.artist_id
+               )
+               AND NOT EXISTS (
+                   SELECT 1 FROM library_track_artists lta
+                   WHERE lta.library_id = library_artists.library_id
+                     AND lta.artist_id = library_artists.artist_id
+               )
+               AND NOT EXISTS (
+                   SELECT 1 FROM library_album_artists laa
+                   WHERE laa.library_id = library_artists.library_id
+                     AND laa.artist_id = library_artists.artist_id
+               )
+               AND NOT EXISTS (
+                   SELECT 1 FROM library_albums lb
+                   WHERE lb.library_id = library_artists.library_id
+                     AND lb.artist_id = library_artists.artist_id
+               )",
+        )
+        .bind(library_id)
+        .execute(pool)
+        .await?;
+        Ok(result.rows_affected())
+    }
+
 }

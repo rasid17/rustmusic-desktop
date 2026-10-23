@@ -590,9 +590,6 @@ async fn prune_missing_files(
     let connus = LibraryFilesRepository::paths_under(pool, library_id, directory)
         .await
         .map_err(|e| format!("lecture de la base : {e}"))?;
-    if connus.is_empty() {
-        return Ok(Vec::new());
-    }
     if files.is_empty() && connus.len() >= 5 {
         log::warn!(
             "📁 {} fichiers connus sous {}, listage vide : montage suspect, rien n'est retiré",
@@ -605,16 +602,32 @@ async fn prune_missing_files(
         files.iter().map(|f| f.to_string_lossy().into_owned()).collect();
     let manquants: Vec<String> =
         connus.into_iter().filter(|p| !presents.contains(p.as_str())).collect();
-    if manquants.is_empty() {
-        return Ok(manquants);
+    if !manquants.is_empty() {
+        LibraryFilesRepository::remove_missing(pool, &manquants)
+            .await
+            .map_err(|e| format!("suppression : {e}"))?;
+        QueueTrackRepository::delete_by_paths(pool, &manquants)
+            .await
+            .map_err(|e| format!("file d'attente : {e}"))?;
+        log::info!("🧹 {} fichiers disparus retirés de la bibliothèque ({})", manquants.len(), directory);
     }
-    LibraryFilesRepository::remove_missing(pool, &manquants)
+    // Les pistes ont disparu par cascade ; les fiches d'album et d'artiste,
+    // elles, n'ont aucun lien vers les pistes. On retire celles qui sont
+    // devenues vides, sinon la grille garde des cartes fantômes. Ce passage
+    // tourne même sans nouveau fichier manquant : il nettoie les fiches
+    // laissées par une version antérieure.
+    let albums = LibraryAlbumRepository::delete_orphans(pool, library_id)
         .await
-        .map_err(|e| format!("suppression : {e}"))?;
-    QueueTrackRepository::delete_by_paths(pool, &manquants)
+        .map_err(|e| format!("albums sans piste : {e}"))?;
+    let artistes = LibraryArtistRepository::delete_orphans(pool, library_id)
         .await
-        .map_err(|e| format!("file d'attente : {e}"))?;
-    log::info!("🧹 {} fichiers disparus retirés de la bibliothèque ({})", manquants.len(), directory);
+        .map_err(|e| format!("artistes sans piste : {e}"))?;
+    if albums > 0 || artistes > 0 {
+        log::info!(
+            "🧹 {} album(s) et {} artiste(s) sans piste retirés ({})",
+            albums, artistes, directory
+        );
+    }
     Ok(manquants)
 }
 
@@ -1183,6 +1196,59 @@ mod tests {
             "hors du dossier listé : intact");
         assert_eq!(compte(&pool, "SELECT count(*) FROM queue_tracks WHERE queue_id = 'q1'").await, 0,
             "la file a lâché le fantôme aussi");
+    }
+
+    #[tokio::test]
+    async fn retire_les_albums_et_artistes_sans_piste() {
+        let pool = base().await;
+        fichier(&pool, "/mus/a.flac").await;
+        fichier(&pool, "/mus/b.flac").await;
+        sqlx::query("INSERT INTO artists (id, name, name_normalized, sort_name) VALUES ('ar1', 'Artiste', 'artiste', 'Artiste')")
+            .execute(&pool).await.unwrap();
+        sqlx::query("INSERT INTO library_artists (library_id, artist_id) VALUES (1, 'ar1')")
+            .execute(&pool).await.unwrap();
+        sqlx::query("INSERT INTO library_albums (id, library_id, artist_id, title, title_normalized, album_dir) VALUES ('al1', 1, 'ar1', 'Album', 'album', '/mus')")
+            .execute(&pool).await.unwrap();
+        for (path, titre) in [("/mus/a.flac", "a"), ("/mus/b.flac", "b")] {
+            sqlx::query("INSERT INTO library_tracks (library_id, file_id, artist_id, library_album_id, title, title_normalized)
+                         SELECT 1, id, 'ar1', 'al1', ?, ? FROM library_files WHERE path = ?")
+                .bind(titre).bind(titre).bind(path)
+                .execute(&pool).await.unwrap();
+        }
+        assert_eq!(compte(&pool, "SELECT total_tracks FROM library WHERE id = 1").await, 2);
+        assert_eq!(compte(&pool, "SELECT total_albums FROM library WHERE id = 1").await, 1);
+
+        // a.flac disparaît, b.flac reste : la fiche album et l'artiste restent.
+        prune_missing_files(&pool, 1, "/mus", &[PathBuf::from("/mus/b.flac")]).await.unwrap();
+        assert_eq!(compte(&pool, "SELECT count(*) FROM library_tracks").await, 1);
+        assert_eq!(compte(&pool, "SELECT count(*) FROM library_albums").await, 1);
+        assert_eq!(compte(&pool, "SELECT count(*) FROM library_artists").await, 1);
+
+        // b.flac disparaît aussi : plus aucune piste, les fiches partent.
+        prune_missing_files(&pool, 1, "/mus", &[]).await.unwrap();
+        assert_eq!(compte(&pool, "SELECT count(*) FROM library_tracks").await, 0);
+        assert_eq!(compte(&pool, "SELECT count(*) FROM library_albums").await, 0);
+        assert_eq!(compte(&pool, "SELECT count(*) FROM library_artists").await, 0);
+        assert_eq!(compte(&pool, "SELECT total_tracks FROM library WHERE id = 1").await, 0);
+        assert_eq!(compte(&pool, "SELECT total_albums FROM library WHERE id = 1").await, 0);
+    }
+
+    #[tokio::test]
+    async fn nettoie_les_fiches_orphelines_meme_sans_fichier_manquant() {
+        let pool = base().await;
+        sqlx::query("INSERT INTO artists (id, name, name_normalized, sort_name) VALUES ('ar1', 'Artiste', 'artiste', 'Artiste')")
+            .execute(&pool).await.unwrap();
+        sqlx::query("INSERT INTO library_artists (library_id, artist_id) VALUES (1, 'ar1')")
+            .execute(&pool).await.unwrap();
+        sqlx::query("INSERT INTO library_albums (id, library_id, artist_id, title, title_normalized, album_dir) VALUES ('al1', 1, 'ar1', 'Album', 'album', '/mus')")
+            .execute(&pool).await.unwrap();
+
+        // Aucun fichier sous le dossier, donc aucun nouveau manquant : le
+        // passage doit quand même retirer les fiches restées sans piste.
+        prune_missing_files(&pool, 1, "/mus", &[]).await.unwrap();
+        assert_eq!(compte(&pool, "SELECT count(*) FROM library_albums").await, 0);
+        assert_eq!(compte(&pool, "SELECT count(*) FROM library_artists").await, 0);
+        assert_eq!(compte(&pool, "SELECT total_albums FROM library WHERE id = 1").await, 0);
     }
 
     #[tokio::test]

@@ -421,13 +421,26 @@ impl LibraryAlbumRepository {
         .await
     }
 
-
-
-
-
-
-
-
+    /// Albums qui n'ont plus aucune piste : le fichier a quitté le dossier et
+    /// la cascade a emporté ses `library_tracks`. Sans ce passage, la fiche
+    /// restait dans la grille, vide et cliquable.
+    pub async fn delete_orphans(
+        pool: &sqlx::SqlitePool,
+        library_id: i64,
+    ) -> Result<u64, sqlx::Error> {
+        let result = sqlx::query(
+            "DELETE FROM library_albums
+             WHERE library_id = ?
+               AND NOT EXISTS (
+                   SELECT 1 FROM library_tracks lt
+                   WHERE lt.library_album_id = library_albums.id
+               )",
+        )
+        .bind(library_id)
+        .execute(pool)
+        .await?;
+        Ok(result.rows_affected())
+    }
 }
 
 #[cfg(test)]

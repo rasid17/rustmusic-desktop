@@ -502,51 +502,10 @@ html, body {
   outline-offset: -1px;
 }
 
-/* ───────────────────────────────────────────────────────────────────────────
-   Lignes de liste : ne peindre que ce qui est à l'écran
-   ───────────────────────────────────────────────────────────────────────────
-   Les bibliothèques chargent par lots au défilement, et les lots s'ajoutent
-   sans jamais être retirés : après quelques écrans, plusieurs milliers de
-   lignes vivent dans le document. Le navigateur en refait la disposition et la
-   peinture à chaque image, y compris pour les 99 % situées hors du cadre.
-
-   `content-visibility: auto` lui dit de sauter ce travail tant que la ligne
-   n'approche pas de la zone visible. La ligne reste dans le document — la
-   recherche du navigateur, l'ancrage du défilement et la hauteur de la barre
-   continuent d'en tenir compte — mais elle ne coûte plus rien à afficher.
-
-   `contain-intrinsic-size: auto <hauteur>` fournit la hauteur présumée d'une
-   ligne jamais encore affichée. Le mot-clé `auto` fait mémoriser au navigateur
-   la hauteur réelle dès le premier affichage : la valeur ci-dessous ne sert
-   donc qu'au tout premier passage, et une approximation suffit.
-
-   Ces classes s'appliquent à la racine des composants de ligne — jamais à un
-   parent d'élément flottant : le confinement rognerait un menu contextuel ou
-   une infobulle qui dépasse de la ligne. */
-.row-track {
-  content-visibility: auto;
-  contain-intrinsic-size: auto 58px;
-}
-
-.row-track-detail {
-  content-visibility: auto;
-  contain-intrinsic-size: auto 92px;
-}
-
-.row-track-compact {
-  content-visibility: auto;
-  contain-intrinsic-size: auto 40px;
-}
-
-.row-album-track {
-  content-visibility: auto;
-  contain-intrinsic-size: auto 64px;
-}
-
-/* Les grilles d'albums et d'artistes n'utilisent volontairement pas
-   `content-visibility` : sous WebKitGTK, une carte survolée sortie de ce mode
-   se repeint en deux temps (carte vide puis complète). Les longues listes de
-   morceaux, elles, gardent l'optimisation. */
+/* Le saut de peinture `content-visibility` provoquait, sous WebKitGTK, des
+   lignes et des cartes vides ou noires au défilement, ainsi qu'au survol.
+   Les listes sont déjà fenêtrées (500 lignes au plus), le coût de peinture
+   reste contenu sans cette optimisation. */
 
 /* ═══════════════════════════════════════════════════════════════════════
    SURFACES TEINTÉES — une teinte `--h` par album ou par genre (home)
