@@ -1,13 +1,13 @@
 <script lang="ts">
-  // Illustration d'une diapo : dégradé en taches et grain ; derrière une grande icône de verre, deux rangées
-  // de pastilles (ce qui est pris en charge) qui défilent en sens contraires.
-  // Sans rien de tout ça, quelques petites icônes flottent autour.
+  // Illustration d'une diapo : dégradé en taches ; derrière une grande icône de verre, deux rangées
+  // statiques de pastilles (ce qui est pris en charge).
+  // Sans rien de tout ça, quelques petites icônes entourent l'icône centrale.
   import Icon from "@iconify/svelte";
   import type { WhatsNewSlide } from "#lib/config/whatsNew";
 
   // Sans flou d'arrière-plan ni filtre : WebKitGTK les recalcule à chaque image du défilement,
   // et peint en noir une couche floutée montée hors écran (les diapos voisines).
-  let { slide, active = true }: { slide: WhatsNewSlide; active?: boolean } = $props();
+  let { slide }: { slide: WhatsNewSlide } = $props();
 
   const PLACES = ["left-[15%] top-[44%]", "right-[15%] top-[24%]", "right-[25%] bottom-[14%]"];
 
@@ -31,7 +31,7 @@
   </span>
 {/snippet}
 
-<div class="art relative h-full w-full overflow-hidden isolate" class:pause={!active}
+<div class="art relative h-full w-full overflow-hidden isolate"
      style="--c0: {c0}; --c1: {c1}; background:
             radial-gradient(90% 120% at 0% 0%, color-mix(in oklab, var(--c0) 85%, white) 0%, transparent 60%),
             radial-gradient(80% 110% at 100% 100%, color-mix(in oklab, var(--c1) 80%, black) 0%, transparent 65%),
@@ -41,7 +41,6 @@
   {:else}
     <div class="absolute left-[-10%] top-[-30%] w-[55%] h-[110%] opacity-60 tache-a" aria-hidden="true"></div>
     <div class="absolute right-[-12%] bottom-[-40%] w-[60%] h-[120%] opacity-50 tache-b" aria-hidden="true"></div>
-    <div class="absolute inset-0 grain" aria-hidden="true"></div>
 
     {#if rangeesLogos.length}
       <!-- Deux rangées qui défilent, bords fondus -->
@@ -57,7 +56,7 @@
       <div class="absolute inset-0 projecteur" aria-hidden="true"></div>
     {:else}
       {#each (slide.satellites ?? []).slice(0, PLACES.length) as s, i (s)}
-        <span class="absolute {PLACES[i]} art-flotte" style="animation-delay: {i * -1.4}s" aria-hidden="true">
+        <span class="absolute {PLACES[i]} art-flotte" aria-hidden="true">
           <span class="verre w-12 h-12 rounded-2xl flex items-center justify-center text-white"><Icon icon={s} width="24" /></span>
         </span>
       {/each}
@@ -75,22 +74,18 @@
   .tache-a { background: radial-gradient(closest-side, color-mix(in oklab, var(--c0) 55%, white), transparent); }
   .tache-b { background: radial-gradient(closest-side, color-mix(in oklab, var(--c1) 70%, white), transparent); }
   .halo { background: radial-gradient(closest-side, rgb(255 255 255 / 0.3), transparent); }
-  .grain {
-    opacity: 0.16;
-    mix-blend-mode: overlay;
-    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='2' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
-  }
   .fondu {
     mask-image: linear-gradient(90deg, transparent, black 14%, black 86%, transparent);
     opacity: 0.78;
   }
+  /* Défilement statique : WebKitGTK repeint ces rangées à chaque image et
+     occupait un cœur entier sur certaines machines. La composition reste
+     lisible sans mouvement. */
   .piste {
     display: flex;
     width: max-content;
-    animation: defile 46s linear infinite;
   }
   .piste.inverse {
-    animation-direction: reverse;
     margin-left: -40px;
   }
   /* Couches propres et ordre explicite : pendant le glissement d'une diapo à l'autre,
@@ -118,18 +113,4 @@
       0 26px 60px color-mix(in oklab, var(--c1) 55%, rgb(0 0 0 / 0.6));
   }
   .centre :global(.icone) { filter: drop-shadow(0 4px 14px rgb(255 255 255 / 0.45)); }
-  .art-flotte { animation: flotte 5.6s ease-in-out infinite; }
-  .pause .piste, .pause .art-flotte { animation-play-state: paused; }
-
-  @keyframes defile {
-    from { transform: translateX(0); }
-    to { transform: translateX(-50%); }
-  }
-  @keyframes flotte {
-    0%, 100% { transform: translateY(0); }
-    50% { transform: translateY(-7px); }
-  }
-  @media (prefers-reduced-motion: reduce) {
-    .piste, .art-flotte { animation: none; }
-  }
 </style>

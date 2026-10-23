@@ -52,7 +52,6 @@ import { resolveShortcuts, eventToBinding, findAction, type ShortcutAction } fro
 import { applyAccent } from "#lib/helper/theme/accent";
 import SleepTimerButton from "#lib/components/player/SleepTimerButton.svelte";
 import WhatsNewButton from "#lib/components/whatsnew/WhatsNewButton.svelte";
-import { showWhatsNewIfDue } from "#lib/actions/whatsNew/WhatsNewAction";
 import { serverStore } from "#lib/stores/mediaServer/mediaServer.store";
 import { fade } from "svelte/transition";
 import { openExternalLinks } from "#lib/helper/tools/externalLinks";
@@ -157,7 +156,6 @@ onMount(async () => {
   importProgressStore.init();
   taskProgressStore.init();
   artistImageReadyStore.init();
-  showWhatsNewIfDue();
 
   // Refresh DLNA status (server may have auto-started in Rust setup)
   refreshDlnaStatus();
