@@ -72,7 +72,14 @@ export default defineConfig(async () => ({
       // 3. tell Vite to ignore watching `src-tauri`
       // `packaging` aussi : les essais Flatpak y laissent des copies entières du
       // projet (.flatpak-builder, venv…), qui épuisaient la limite inotify.
-      ignored: ["**/src-tauri/**", "**/packaging/**"],
+      ignored: [
+        "**/src-tauri/**",
+        "**/packaging/**",
+        "**/project/**",
+        "**/workspace/**",
+        "**/.qoder/**",
+        "**/.qoder-plugin/**",
+      ],
     },
   },
 }));

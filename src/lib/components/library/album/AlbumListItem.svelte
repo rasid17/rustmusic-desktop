@@ -84,7 +84,7 @@ async function loadAlbumTracks() {
             </div>
         {/if}
 
-        <div class="absolute inset-0 bg-linear-to-b from-transparent from-50% to-black/55 opacity-0 group-hover:opacity-100 pointer-events-none"></div>
+        <div class="absolute inset-0 bg-linear-to-b from-transparent from-50% to-black/55 invisible group-hover:visible pointer-events-none"></div>
 
         {#if selection.active}
             <!-- Cadre posé par-dessus l'image : un anneau extérieur serait coupé par la carte. -->
@@ -95,13 +95,13 @@ async function loadAlbumTracks() {
                 <span class="absolute left-2 top-2 z-2 px-1.5 py-0.5 rounded-[5px] text-[10px] font-bold tracking-[0.03em] bg-black/65 text-[#f3d38a]">{hiRes}</span>
             {/if}
             <button type="button" class="absolute right-2 top-2 z-2 w-7.5 h-7.5 rounded-lg flex items-center justify-center cursor-pointer
-                                        bg-black/55 text-white opacity-0 group-hover:opacity-100 focus-visible:opacity-100 transition-opacity hover:bg-black/75"
+                                        bg-black/55 text-white invisible group-hover:visible focus-visible:visible hover:bg-black/75"
                     title={$t("albums_view.more")} aria-label={$t("albums_view.more")} onclick={menu}>
                 <Icon icon="material-symbols:more-horiz" width="18" />
             </button>
             <button type="button" class="absolute right-2.5 bottom-2.5 z-2 w-11 h-11 rounded-full flex items-center justify-center cursor-pointer
-                                        bg-(--rg-g) text-(--rg-on-g) shadow-[0_6px_16px_rgba(0,0,0,0.5)]
-                                        opacity-0 group-hover:opacity-100 focus-visible:opacity-100 transition-opacity duration-150"
+                                        bg-(--rg-g) text-(--rg-on-g)
+                                        invisible group-hover:visible focus-visible:visible"
                     title={$t("albums_view.play")} aria-label={`${$t("albums_view.play")} ${album.title}`} onclick={play}>
                 <Icon icon="material-symbols:play-arrow-rounded" width="28" />
             </button>

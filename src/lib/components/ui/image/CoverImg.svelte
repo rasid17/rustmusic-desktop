@@ -46,6 +46,8 @@ $effect(() => {
     let vivant = true;
     resolveCoverSrc(currentPath, size).then(url => {
         if (vivant) src = url;
+    }).catch(() => {
+        if (vivant) src = null;
     });
     return () => { vivant = false; };
 });

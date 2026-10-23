@@ -58,7 +58,7 @@ function withoutNavigating(e: MouseEvent, action: () => void) {
                     {$t("artists_view.missing_portrait")}
                 </div>
             {/if}
-            <div class="absolute inset-0 bg-black/0 group-hover:bg-black/25 transition-colors duration-150 pointer-events-none"></div>
+            <div class="absolute inset-0 bg-black/25 invisible group-hover:visible pointer-events-none"></div>
             {#if isSelected}<span class="absolute inset-0 rounded-full ring-3 ring-inset ring-(--rg-g) pointer-events-none"></span>{/if}
         </div>
 
@@ -66,13 +66,13 @@ function withoutNavigating(e: MouseEvent, action: () => void) {
             <SelectionCheck coche={isSelected} surImage class="absolute left-1 top-1 z-3" />
         {:else}
             <button type="button" class="absolute right-1 top-1 z-2 w-7.5 h-7.5 rounded-lg flex items-center justify-center cursor-pointer
-                                        bg-black/55 text-white opacity-0 group-hover:opacity-100 focus-visible:opacity-100 transition-opacity hover:bg-black/75"
+                                        bg-black/55 text-white invisible group-hover:visible focus-visible:visible hover:bg-black/75"
                     title={$t("artists_view.more")} aria-label={$t("artists_view.more")} onclick={(e) => withoutNavigating(e, () => (menu = { x: e.clientX, y: e.clientY }))}>
                 <Icon icon="material-symbols:more-horiz" width="18" />
             </button>
             <button type="button" class="absolute right-[7%] bottom-[7%] z-2 w-11 h-11 rounded-full flex items-center justify-center cursor-pointer
-                                        bg-(--rg-g) text-(--rg-on-g) shadow-[0_6px_16px_rgba(0,0,0,0.5)]
-                                        opacity-0 group-hover:opacity-100 focus-visible:opacity-100 transition-opacity duration-150"
+                                        bg-(--rg-g) text-(--rg-on-g)
+                                        invisible group-hover:visible focus-visible:visible"
                     title={$t("artists_view.play")} aria-label={`${$t("artists_view.play")} ${artist.name}`} onclick={(e) => withoutNavigating(e, () => handleArtistPlay(libraryId, artist.id))}>
                 <Icon icon="material-symbols:play-arrow-rounded" width="28" />
             </button>

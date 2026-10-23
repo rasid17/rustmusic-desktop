@@ -3,12 +3,18 @@ import { convertFileSrc } from "@tauri-apps/api/core";
 
 export type CoverSize = '1x' | '2x' | 'full';
 
-const COVER_MODE: 'asset' | 'base64' = 'asset';
+// Le protocole d'assets de Tauri ne sert pas les fichiers à la WebView de dev
+// sous WebKitGTK (asset:// comme http://asset.localhost échouent). En dev, on
+// passe par des data: URLs ; le build de production garde le protocole rapide.
+const COVER_MODE: 'asset' | 'base64' = import.meta.env.DEV ? 'base64' : 'asset';
 
-/** convertFileSrc encode les / en %2F sur Linux → 403. On les décode + fix double-slash. */
+/** convertFileSrc encode les / en %2F sur Linux → 403. On les décode, puis
+ *  on ramène `asset://localhost//home/...` à `asset://localhost/home/...` :
+ *  le protocole d'assets rejette le double slash. */
 function assetSrc(path: string): string {
     return convertFileSrc(path)
-        .replaceAll('%2F', '/');
+        .replaceAll('%2F', '/')
+        .replace(/([^:])\/{2,}/g, '$1/');
 }
 
 function resolvedPathFor(path: string, size: CoverSize): string {
@@ -45,7 +51,18 @@ export function coverSrcCached(
     if (resolvedPath.startsWith("http") || resolvedPath.startsWith("data:") || resolvedPath.startsWith("blob:")) return resolvedPath;
     if (path.startsWith("/images/")) return path;
 
-    if (COVER_MODE === 'asset') return assetGet(resolvedPath);
+    if (COVER_MODE === 'asset') {
+        const connu = assetGet(resolvedPath);
+        if (connu !== undefined) return connu;
+        // La grande pochette ne dépend d'aucune génération : son URL est
+        // connue tout de suite. Attendre l'observateur laissait le hero vide.
+        if (size === 'full') {
+            const url = assetSrc(resolvedPath);
+            assetSet(resolvedPath, url);
+            return url;
+        }
+        return undefined;
+    }
     return lruGet(resolvedPath);
 }
 
@@ -119,7 +136,13 @@ export function resolveBlurredCover(
     const connue = floues.get(cle);
     if (connue) return connue;
     const p = invoke<string>("resolve_blurred_cover", { path, saturation, flou })
-        .then(assetSrc)
+        .then(async (chemin) => {
+            if (!chemin) return null;
+            if (import.meta.env.DEV) {
+                return await invoke<string>("read_cover_as_base64", { path: chemin });
+            }
+            return assetSrc(chemin);
+        })
         .catch(() => {
             floues.delete(cle);
             return null;
@@ -159,6 +182,10 @@ export async function resolveCoverSrc(path: string | null | undefined, size: Cov
                 lruSet(resolvedPath, dataUri);
                 pending.delete(resolvedPath);
                 return dataUri;
+            })
+            .catch(error => {
+                pending.delete(resolvedPath);
+                throw error;
             });
         pending.set(resolvedPath, promise);
     }

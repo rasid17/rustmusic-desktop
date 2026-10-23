@@ -47,8 +47,12 @@ const fiche = $derived.by((): Fiche | null => {
       album: tags?.album ?? "",
       annee: tags?.year ? String(dateToYear(tags.year)) : "",
       duree: audioFile?.duration ?? 0,
-      pochette: (pisteFile?.path === chemin ? pisteFile?.cover : null)
-        ?? tags?.attached_images?.[0]?.image_src ?? null,
+      // La pochette embarquée est déjà chargée par le lecteur : plus fiable
+      // qu'un chemin de cache, et disponible même sans attendre le protocole
+      // d'assets de la WebView.
+      pochette: tags?.attached_images?.[0]?.image_src
+        ?? (pisteFile?.path === chemin ? pisteFile?.cover : null)
+        ?? null,
     };
   }
   if (dernier) {
