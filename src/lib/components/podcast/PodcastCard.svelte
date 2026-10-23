@@ -38,7 +38,7 @@
   <a href="/podcasts/{podcast.id}" class="min-w-0 flex flex-col gap-2.5">
     <span class="relative block">
       <PodcastCover path={podcast.cover_path} icone={44}
-                    class="aspect-square w-full rounded-2xl shadow-[0_10px_26px_rgba(0,0,0,0.18)] dark:shadow-[0_10px_26px_rgba(0,0,0,0.5)] transition-transform duration-200 group-hover:-translate-y-0.5" />
+                    class="aspect-square w-full rounded-2xl shadow-[0_10px_26px_rgba(0,0,0,0.18)] dark:shadow-[0_10px_26px_rgba(0,0,0,0.5)]" />
       {#if podcast.new_count > 0}
         <span class="absolute left-2 top-2 h-6 px-2 inline-flex items-center rounded-full text-[11px] font-bold bg-(--rg-g) text-(--rg-on-g) shadow-sm">
           {podcast.new_count.toLocaleString($currentLocale)} {$t(podcast.new_count === 1 ? "podcasts.new_short_one" : "podcasts.new_short_n")}

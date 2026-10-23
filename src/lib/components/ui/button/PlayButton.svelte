@@ -14,8 +14,8 @@
 
 {#if size === "lg"}
   <button type="button" {title} {disabled} {onclick}
-          class="h-12 pl-4.5 pr-6 flex items-center gap-2 rounded-full cursor-pointer transition-transform hover:scale-[1.02]
-                 disabled:opacity-50 disabled:cursor-default disabled:hover:scale-100 bg-(--rg-g) text-(--rg-on-g) text-[15px] font-extrabold">
+          class="h-12 pl-4.5 pr-6 flex items-center gap-2 rounded-full cursor-pointer
+                 disabled:opacity-50 disabled:cursor-default bg-(--rg-g) text-(--rg-on-g) text-[15px] font-extrabold">
     <Icon icon="material-symbols:play-arrow-rounded" width="26" />
     {label}
   </button>

@@ -72,7 +72,7 @@ function withoutNavigating(e: MouseEvent, action: () => void) {
             </button>
             <button type="button" class="absolute right-[7%] bottom-[7%] z-2 w-11 h-11 rounded-full flex items-center justify-center cursor-pointer
                                         bg-(--rg-g) text-(--rg-on-g) shadow-[0_6px_16px_rgba(0,0,0,0.5)]
-                                        opacity-0 translate-y-1.5 group-hover:opacity-100 group-hover:translate-y-0 focus-visible:opacity-100 transition-all duration-150 hover:scale-105"
+                                        opacity-0 group-hover:opacity-100 focus-visible:opacity-100 transition-opacity duration-150"
                     title={$t("artists_view.play")} aria-label={`${$t("artists_view.play")} ${artist.name}`} onclick={(e) => withoutNavigating(e, () => handleArtistPlay(libraryId, artist.id))}>
                 <Icon icon="material-symbols:play-arrow-rounded" width="28" />
             </button>

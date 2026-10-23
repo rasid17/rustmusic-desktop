@@ -101,7 +101,7 @@ let glowClasses = $derived(
                 <CoverImg
                     path={currentTrack.cover}
                     alt={currentTrack.title}
-                    class="h-full w-full object-cover transition-transform duration-700 ease-out group-hover:scale-105"
+                    class="h-full w-full object-cover"
                 />
                 <div
                     class="absolute inset-0 rounded-xl shadow-[inset_0_0_12px_rgba(0,0,0,0.08)]

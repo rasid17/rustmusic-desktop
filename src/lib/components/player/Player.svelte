@@ -248,7 +248,7 @@ const gros = "w-11 h-11 shrink-0 flex items-center justify-center rounded-full c
           <button
             type="button"
             class="lecteur-lecture relative w-12.5 h-12.5 mx-2 shrink-0 flex items-center justify-center rounded-full cursor-pointer
-                   bg-(--lc-play) text-(--lc-play-tx) transition-transform hover:scale-105 active:scale-95"
+                   bg-(--lc-play) text-(--lc-play-tx)"
             title={enAttente ? $t("player.preparing") : isPlaying ? $t("player.pause") : $t("player.play")}
             aria-label={isPlaying ? $t("player.pause") : $t("player.play")}
             aria-busy={enAttente}

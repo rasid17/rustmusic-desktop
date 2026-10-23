@@ -349,8 +349,7 @@ function handleRelease() {
                         group-hover:shadow-[0_2px_8px_rgba(0,0,0,0.08)]
                         dark:group-hover:shadow-[0_2px_8px_rgba(0,0,0,0.3)]">
               <CoverImg path={queueTrack.cover} alt={queueTrack.title}
-                   class="h-full w-full object-cover
-                          transition-transform duration-500 ease-out group-hover:scale-[1.06]" />
+                   class="h-full w-full object-cover" />
             </div>
 
             <!-- Info -->

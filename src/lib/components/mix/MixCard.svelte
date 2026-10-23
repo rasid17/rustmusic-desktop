@@ -95,7 +95,6 @@
     <!-- La pochette du mix : quatre albums qu'il contient. -->
     <div class="relative aspect-square overflow-hidden shrink-0
                 shadow-[0_12px_32px_rgba(0,0,0,0.28)] ring-1 ring-black/5 dark:ring-white/[0.07]
-                transition-transform duration-300 group-hover:-translate-y-1
                 {horizontale ? 'w-32 rounded-xl @4xl:w-full @4xl:rounded-2xl' : 'w-full rounded-2xl'}">
       {#if !a}
         <div class="absolute inset-0 bg-neutral-200 dark:bg-white/6 {visible ? 'animate-pulse' : ''}"></div>
@@ -126,9 +125,9 @@
       {/if}
 
       <span class="absolute rounded-full bg-accent-500 text-(--rg-on-g)
-                   flex items-center justify-center shadow-[0_8px_20px_rgba(0,0,0,0.4)] transition-all duration-200
+                   flex items-center justify-center shadow-[0_8px_20px_rgba(0,0,0,0.4)] transition-opacity duration-200
                    {horizontale ? 'right-2 bottom-2 w-9 h-9 @4xl:right-3.5 @4xl:bottom-3.5 @4xl:w-12 @4xl:h-12' : decennie ? 'right-3 bottom-3 w-10 h-10' : 'right-3.5 bottom-3.5 w-12 h-12'}
-                   {lance ? 'opacity-100' : 'opacity-0 translate-y-1.5 group-hover:opacity-100 group-hover:translate-y-0'}">
+                   {lance ? 'opacity-100' : 'opacity-0 group-hover:opacity-100'}">
         <Icon icon={lance ? "lucide:loader-circle" : "mynaui:play-solid"} width={decennie ? 18 : 20} class={lance ? "animate-spin" : ""} />
       </span>
     </div>

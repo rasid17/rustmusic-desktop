@@ -31,7 +31,7 @@
 <div class="group relative min-w-0" role="presentation" oncontextmenu={openMenu}>
   <button type="button" onclick={onopen} class="w-full min-w-0 flex flex-col gap-2.5 text-left cursor-pointer">
     <span class="relative block aspect-square w-full overflow-hidden rounded-2xl bg-(--rg-s2)
-                 shadow-[0_10px_26px_rgba(0,0,0,0.16)] dark:shadow-[0_10px_26px_rgba(0,0,0,0.5)] transition-transform duration-200 group-hover:-translate-y-0.5">
+                 shadow-[0_10px_26px_rgba(0,0,0,0.16)] dark:shadow-[0_10px_26px_rgba(0,0,0,0.5)]">
       {#if podcast.image_url}
         <img src={podcast.image_url} alt="" loading="lazy" decoding="async" class="absolute inset-0 w-full h-full object-cover" />
       {:else}

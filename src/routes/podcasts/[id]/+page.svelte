@@ -370,7 +370,7 @@
           </span>
         </span>
       </span>
-      <span class="shrink-0 w-12 h-12 rounded-full flex items-center justify-center bg-violet-600 text-white shadow-[0_6px_18px_rgba(139,92,246,0.4)] transition-transform group-hover:scale-105">
+      <span class="shrink-0 w-12 h-12 rounded-full flex items-center justify-center bg-violet-600 text-white shadow-[0_6px_18px_rgba(139,92,246,0.4)]">
         <Icon icon={playbackStateOf(aEcouter) === "playing" ? "material-symbols:pause-rounded" : "material-symbols:play-arrow-rounded"} width="26" />
       </span>
     </button>

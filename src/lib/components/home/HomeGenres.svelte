@@ -26,13 +26,13 @@ const formatNumber = (n: number) => new Intl.NumberFormat($currentLocale).format
     {#each affiches as g (g.name)}
       <button type="button" onclick={() => goto(`/library/${libraryId}/genres/${encodeURIComponent(g.name)}`)}
               class="genre-tuile group relative h-33 flex items-start rounded-2xl overflow-hidden text-left cursor-pointer
-                     transition-transform duration-300 hover:-translate-y-1"
+"
               style="--h: {hue(g.name)}">
 
         <!-- L'icône du genre, baignée dans la lueur du coin -->
         <Icon icon={genreIcon(g.name)} width={88} height={88} aria-hidden="true"
               class="genre-icone absolute right-2 -bottom-2 -rotate-12
-                     transition-transform duration-300 group-hover:-rotate-3 group-hover:scale-110" />
+" />
 
         <span class="relative flex flex-col gap-1 p-4 pr-16">
           <span class="genre-titre text-[19px] font-extrabold tracking-[-0.01em] leading-tight line-clamp-2">{g.name}</span>

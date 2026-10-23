@@ -24,11 +24,11 @@
 <div class="group min-w-0 flex flex-col gap-2.5">
   <button type="button" onclick={onplay} title={$t("podcasts.play")} aria-label="{$t('podcasts.play')} : {episode.title}"
           class="relative block aspect-square w-full overflow-hidden rounded-2xl cursor-pointer
-                 shadow-[0_10px_26px_rgba(0,0,0,0.16)] dark:shadow-[0_10px_26px_rgba(0,0,0,0.5)] transition-transform duration-200 group-hover:-translate-y-0.5">
+                 shadow-[0_10px_26px_rgba(0,0,0,0.16)] dark:shadow-[0_10px_26px_rgba(0,0,0,0.5)]">
     <PodcastCover path={episode.cover_path} icone={40} class="w-full h-full" />
     <span class="absolute inset-x-0 bottom-0 h-1/2 bg-linear-to-t from-black/55 to-transparent pointer-events-none"></span>
     <span class="absolute right-2.5 bottom-2.5 w-11 h-11 rounded-full flex items-center justify-center shadow-lg transition
-                 {enLecture ? 'bg-(--rg-g) text-(--rg-on-g) opacity-100' : 'bg-white text-black opacity-0 translate-y-1 group-hover:opacity-100 group-hover:translate-y-0'}">
+                 {enLecture ? 'bg-(--rg-g) text-(--rg-on-g) opacity-100' : 'bg-white text-black opacity-0 group-hover:opacity-100'}">
       <Icon icon={enLecture ? "material-symbols:graphic-eq-rounded" : "material-symbols:play-arrow-rounded"} width="26" />
     </span>
     {#if episode.new_count > 0}

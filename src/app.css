@@ -543,22 +543,10 @@ html, body {
   contain-intrinsic-size: auto 64px;
 }
 
-/* Mêmes raisons pour les vignettes des grilles : six cents albums et neuf cents
-   artistes restaient tous peints, avec leurs images décodées en mémoire. La
-   hauteur ci-dessous ne sert qu'au premier passage — `auto` fait mémoriser la
-   vraie au navigateur.
-
-   Posées sur la racine de la carte ; son menu contextuel est un frère, donc le
-   confinement ne l'atteint pas. */
-.card-album {
-  content-visibility: auto;
-  contain-intrinsic-size: auto 280px;
-}
-
-.card-artist {
-  content-visibility: auto;
-  contain-intrinsic-size: auto 232px;
-}
+/* Les grilles d'albums et d'artistes n'utilisent volontairement pas
+   `content-visibility` : sous WebKitGTK, une carte survolée sortie de ce mode
+   se repeint en deux temps (carte vide puis complète). Les longues listes de
+   morceaux, elles, gardent l'optimisation. */
 
 /* ═══════════════════════════════════════════════════════════════════════
    SURFACES TEINTÉES — une teinte `--h` par album ou par genre (home)

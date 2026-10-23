@@ -223,7 +223,7 @@ async function playFromQueue(track: QueueTrack, index: number) {
       </span>
     {/if}
     <span class="absolute inset-0 flex items-center justify-center bg-black/35
-                 opacity-0 group-hover:opacity-100 transition-opacity duration-200">
+                 opacity-0 group-hover:opacity-100">
       <span class="w-16 h-16 rounded-full bg-accent-500 text-(--rg-on-g) flex items-center justify-center shadow-xl">
         <Icon icon={enCours && isPlaying ? "mynaui:pause-solid" : "mynaui:play-solid"} width={28} />
       </span>

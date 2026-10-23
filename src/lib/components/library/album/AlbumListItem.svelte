@@ -84,7 +84,7 @@ async function loadAlbumTracks() {
             </div>
         {/if}
 
-        <div class="absolute inset-0 bg-linear-to-b from-transparent from-50% to-black/55 opacity-0 group-hover:opacity-100 transition-opacity duration-150 pointer-events-none"></div>
+        <div class="absolute inset-0 bg-linear-to-b from-transparent from-50% to-black/55 opacity-0 group-hover:opacity-100 pointer-events-none"></div>
 
         {#if selection.active}
             <!-- Cadre posé par-dessus l'image : un anneau extérieur serait coupé par la carte. -->
@@ -101,7 +101,7 @@ async function loadAlbumTracks() {
             </button>
             <button type="button" class="absolute right-2.5 bottom-2.5 z-2 w-11 h-11 rounded-full flex items-center justify-center cursor-pointer
                                         bg-(--rg-g) text-(--rg-on-g) shadow-[0_6px_16px_rgba(0,0,0,0.5)]
-                                        opacity-0 translate-y-1.5 group-hover:opacity-100 group-hover:translate-y-0 focus-visible:opacity-100 transition-all duration-150 hover:scale-105"
+                                        opacity-0 group-hover:opacity-100 focus-visible:opacity-100 transition-opacity duration-150"
                     title={$t("albums_view.play")} aria-label={`${$t("albums_view.play")} ${album.title}`} onclick={play}>
                 <Icon icon="material-symbols:play-arrow-rounded" width="28" />
             </button>

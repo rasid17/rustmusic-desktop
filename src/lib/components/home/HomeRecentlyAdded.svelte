@@ -33,7 +33,7 @@ const affiches = $derived(
                     border border-neutral-200 dark:border-[#1f2522]">
           {#if album.cover_url}
             <CoverImg path={album.cover_url} alt={album.title} size="2x"
-                      class="w-full h-full object-cover transition-transform duration-300 group-hover:scale-105" />
+                      class="w-full h-full object-cover" />
           {:else}
             <div class="w-full h-full flex items-center justify-center">
               <Icon icon="lucide:disc-album" width={32} class="text-neutral-400" />

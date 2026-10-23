@@ -187,8 +187,7 @@ function openMenu(e: MouseEvent, track: RecentFileListView) {
             <button type="button" onclick={() => play(a.cle, a.pistes[0].path)}
                     title={$t('home.resume_album')} aria-label="{$t('home.resume_album')} : {a.album}"
                     class="group relative aspect-square rounded-[10px] overflow-hidden cursor-pointer
-                           bg-neutral-200 dark:bg-neutral-800 shadow-[0_8px_24px_rgba(0,0,0,0.3)]
-                           transition-transform duration-300 hover:-translate-y-1">
+                           bg-neutral-200 dark:bg-neutral-800 shadow-[0_8px_24px_rgba(0,0,0,0.3)]">
               {#if a.pochette}
                 <CoverImg path={a.pochette} size="2x" class="w-full h-full object-cover" />
               {:else}
@@ -197,7 +196,7 @@ function openMenu(e: MouseEvent, track: RecentFileListView) {
                 </span>
               {/if}
               <span class="absolute inset-0 flex items-center justify-center bg-black/30
-                           opacity-0 group-hover:opacity-100 transition-opacity duration-200">
+                           opacity-0 group-hover:opacity-100">
                 <span class="w-12 h-12 rounded-full bg-accent-500 text-(--rg-on-g) flex items-center justify-center
                              shadow-[0_8px_20px_rgba(0,0,0,0.4)]">
                   <Icon icon={occupe === a.cle ? "lucide:loader-circle" : "mynaui:play-solid"} width={22}

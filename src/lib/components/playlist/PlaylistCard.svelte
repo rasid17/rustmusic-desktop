@@ -105,7 +105,7 @@
   <div class="group relative min-w-0">
     <a {href} class="min-w-0 flex flex-col gap-2.5" oncontextmenu={menu} onclick={open}>
       <span class="relative block">
-        {@render mosaique("aspect-square w-full rounded-2xl shadow-[0_10px_26px_rgba(0,0,0,0.18)] dark:shadow-[0_10px_26px_rgba(0,0,0,0.5)] transition-transform duration-200 group-hover:-translate-y-0.5", 44)}
+        {@render mosaique("aspect-square w-full rounded-2xl shadow-[0_10px_26px_rgba(0,0,0,0.18)] dark:shadow-[0_10px_26px_rgba(0,0,0,0.5)]", 44)}
         {#if auto}
           <span class="absolute left-2 top-2 h-6 px-2 inline-flex items-center gap-1 rounded-full text-[11px] font-bold bg-black/55 text-white backdrop-blur-sm">
             <Icon icon="material-symbols:auto-awesome-rounded" width="13" />{$t("playlists_view.smart_badge")}

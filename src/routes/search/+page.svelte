@@ -128,7 +128,7 @@
        class="group min-w-0 p-2.5 -m-2.5 rounded-2xl cursor-pointer transition-colors hover:bg-(--rg-hover)">
     <div class="relative aspect-square rounded-xl overflow-hidden shadow-[0_8px_24px_rgba(0,0,0,0.18)] bg-(--rg-s2)">
       {#if r.thumbnail_path}
-        <CoverImg path={r.thumbnail_path} alt="" class="w-full h-full object-cover transition-transform duration-300 group-hover:scale-[1.03]" />
+        <CoverImg path={r.thumbnail_path} alt="" class="w-full h-full object-cover" />
       {:else}
         <span class="w-full h-full flex items-center justify-center text-(--rg-mu)"><Icon icon="material-symbols:album-outline" width="40" /></span>
       {/if}
@@ -239,7 +239,7 @@
                 {#if top.subtitle}<span class="truncate">{top.subtitle}</span>{/if}
               </p>
               <span class="absolute right-5 bottom-5 w-12 h-12 rounded-full flex items-center justify-center shadow-lg
-                           bg-(--rg-g) text-(--rg-on-g) opacity-0 translate-y-1 transition-all group-hover:opacity-100 group-hover:translate-y-0">
+                           bg-(--rg-g) text-(--rg-on-g) opacity-0 group-hover:opacity-100">
                 <Icon icon={top.result_type === "track" ? "material-symbols:play-arrow-rounded" : "material-symbols:arrow-forward-rounded"} width="26" />
               </span>
             </div>

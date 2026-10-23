@@ -243,7 +243,7 @@
         <button type="button" class={ib} title={$t("player.prev")} aria-label={$t("player.prev")} onclick={() => sendCmd("prev")}>
           <Icon icon="material-symbols:skip-previous-rounded" width="28" />
         </button>
-        <button type="button" class="lecteur-lecture relative w-11.5 h-11.5 flex items-center justify-center rounded-full cursor-pointer transition-transform hover:scale-105 active:scale-95 bg-(--lc-play) text-(--lc-play-tx)"
+        <button type="button" class="lecteur-lecture relative w-11.5 h-11.5 flex items-center justify-center rounded-full cursor-pointer bg-(--lc-play) text-(--lc-play-tx)"
                 title={enAttente ? $t("player.preparing") : isPlaying ? $t("player.pause") : $t("player.play")} aria-label={isPlaying ? $t("player.pause") : $t("player.play")}
                 aria-busy={enAttente} onclick={() => sendCmd("toggle-play")}>
           <Icon icon={isPlaying ? "material-symbols:pause-rounded" : "material-symbols:play-arrow-rounded"} width="28" />
