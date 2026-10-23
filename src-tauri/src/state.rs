@@ -192,26 +192,32 @@ fn base_path(url: &str) -> Option<String> {
 /// a dérivé. `VACUUM INTO` prend un instantané cohérent, WAL compris, là où une
 /// copie de fichier laisserait le journal de côté.
 async fn backup_before_migration(pool: &SqlitePool, database_url: &str) {
-    let attendue = sqlx::migrate!("./SQL/")
-        .migrations
-        .last()
-        .map(|m| m.version)
-        .unwrap_or(0);
+    let migrations = sqlx::migrate!("./SQL/");
 
     // Table absente : installation neuve, il n'y a rien à perdre.
-    let appliquee = match sqlx::query_scalar::<_, Option<i64>>(
-        "SELECT MAX(version) FROM _sqlx_migrations",
+    // On compare la liste complète, pas seulement le maximum : en intégrant
+    // un fork, une migration ajoutée après coup peut porter une version plus
+    // ancienne que la dernière appliquée et doit tout de même déclencher la
+    // copie.
+    let appliquees: Vec<i64> = match sqlx::query_scalar::<_, i64>(
+        "SELECT version FROM _sqlx_migrations",
     )
-    .fetch_one(pool)
+    .fetch_all(pool)
     .await
     {
-        Ok(Some(v)) => v,
-        _ => return,
+        Ok(v) => v,
+        Err(_) => return,
     };
 
-    if appliquee >= attendue {
+    if migrations
+        .migrations
+        .iter()
+        .all(|m| appliquees.contains(&m.version))
+    {
         return;
     }
+
+    let appliquee = appliquees.iter().copied().max().unwrap_or(0);
 
     let Some(chemin) = base_path(database_url) else {
         return;
@@ -282,12 +288,43 @@ mod tests {
         assert!(std::path::Path::new(&copie).exists(), "sauvegarde attendue en {copie}");
 
         // À jour : plus de sauvegarde.
-        let derniere = sqlx::migrate!("./SQL/").migrations.last().map(|m| m.version).unwrap_or(0);
-        sqlx::query("UPDATE _sqlx_migrations SET version = ?").bind(derniere)
-            .execute(&pool).await.expect("mise à jour");
+        sqlx::query("DELETE FROM _sqlx_migrations").execute(&pool).await.expect("vidage");
+        for m in sqlx::migrate!("./SQL/").migrations.iter() {
+            sqlx::query("INSERT INTO _sqlx_migrations (version) VALUES (?)")
+                .bind(m.version).execute(&pool).await.expect("version appliquée");
+        }
         std::fs::remove_file(&copie).expect("retrait");
         backup_before_migration(&pool, &url).await;
         assert!(!std::path::Path::new(&copie).exists(), "aucune sauvegarde attendue");
+
+        pool.close().await;
+        let _ = std::fs::remove_dir_all(&dossier);
+    }
+
+    #[tokio::test]
+    async fn a_pending_older_migration_is_backed_up() {
+        let dossier = std::env::temp_dir().join(format!("rm-sauv-ancien-{}", std::process::id()));
+        std::fs::create_dir_all(&dossier).expect("dossier");
+        let chemin = dossier.join("essai.db");
+        let _ = std::fs::remove_file(&chemin);
+        let url = format!("sqlite:{}?mode=rwc", chemin.display());
+
+        let pool = SqlitePool::connect(&url).await.expect("base");
+        sqlx::query("CREATE TABLE _sqlx_migrations (version BIGINT PRIMARY KEY)")
+            .execute(&pool).await.expect("table");
+
+        // Tout est appliqué sauf la première migration : le maximum reste le
+        // dernier, mais il manque une version plus ancienne (cas d'un fork).
+        let migrations = sqlx::migrate!("./SQL/");
+        for m in migrations.migrations.iter().skip(1) {
+            sqlx::query("INSERT INTO _sqlx_migrations (version) VALUES (?)")
+                .bind(m.version).execute(&pool).await.expect("version");
+        }
+        let max = migrations.migrations.iter().map(|m| m.version).max().unwrap_or(0);
+
+        backup_before_migration(&pool, &url).await;
+        let copie = format!("{}.avant-{max}.bak", chemin.display());
+        assert!(std::path::Path::new(&copie).exists(), "sauvegarde attendue en {copie}");
 
         pool.close().await;
         let _ = std::fs::remove_dir_all(&dossier);

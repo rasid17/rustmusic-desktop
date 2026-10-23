@@ -209,12 +209,14 @@ async fn prepare_next(ctl: &Controller, path: &Path, seq: u64) -> Result<(), Str
 /// Publie `path` et prépare ses métadonnées.
 async fn prepare(ctl: &Controller, path: &Path) -> Result<(Loaded, TrackMeta, String), String> {
     let host = local_ip_toward(ctl.renderer().ip).ok_or("adresse locale introuvable vers le lecteur")?;
-    let owned = path.to_path_buf();
+    // Morceau distant : son fichier du cache, déjà complet.
+    let file = crate::core::subsonic::stream::cached(path).unwrap_or_else(|| path.to_path_buf());
+    let owned = file.clone();
     let (mut meta, cover) = tokio::task::spawn_blocking(move || read_meta(&owned))
         .await
         .map_err(|e| e.to_string())?;
-    check_format(ctl, path).await?;
-    let published = media::publish(path, cover, host).await?;
+    check_format(ctl, &file).await?;
+    let published = media::publish(&file, cover, host).await?;
     meta.cover_url = published.cover_url.clone();
     let didl = didl::item(&meta, &published.url, &published.mime);
     Ok((Loaded { path: path.to_path_buf(), url: published.url }, meta, didl))

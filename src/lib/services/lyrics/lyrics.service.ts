@@ -1,6 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 
-export type LyricsSource = "sidecar" | "lrclib" | "lyricsovh" | "manual" | "none";
+export type LyricsSource = "sidecar" | "lrclib" | "lyricsovh" | "manual" | "server" | "none";
 
 export type Lyrics = {
     track_id: string;

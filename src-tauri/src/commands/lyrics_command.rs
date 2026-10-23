@@ -40,9 +40,10 @@ async fn reglage_actif(pool: &sqlx::SqlitePool, cle: &str) -> bool {
 /// 2. Lookup library_tracks via file_id → métadonnées + library_track_id
 /// 3. Cache DB (renvoyé tel quel même si partiel ou "none")
 /// 4. Sidecar `.lrc` à côté du fichier
-/// 5. LRCLIB en ligne (throttlé, avec pause après rejet), si activé en réglages
-/// 6. Repli lyrics.ovh (texte simple seul), si activé
-/// 7. Rien trouvé → marque `source=none` pour ne pas re-spammer ; une panne
+/// 5. Morceau d'un serveur : ses paroles
+/// 6. LRCLIB en ligne (throttlé, avec pause après rejet), si activé en réglages
+/// 7. Repli lyrics.ovh (texte simple seul), si activé
+/// 8. Rien trouvé → marque `source=none` pour ne pas re-spammer ; une panne
 ///    de service n'est pas une absence et ne se met pas en cache.
 #[tauri::command]
 pub async fn get_lyrics(
@@ -94,9 +95,22 @@ pub async fn get_lyrics(
         return Ok(Some(saved));
     }
 
-    // 5. LRCLIB en ligne (paroles synchronisées si possible)
+    // 6. LRCLIB en ligne (paroles synchronisées si possible)
     let artist = track.artist.unwrap_or_default();
     let title = track.title.clone();
+
+    // 5. Morceau d'un serveur : ses paroles (intégrées aux fichiers ou .lrc posés à côté, là-bas).
+    if let Some(found) = crate::service::external_server::track_service::server_lyrics(&state.pool, &path, &artist, &title).await {
+        let saved = LyricsRepository::upsert(
+            &state.pool,
+            LyricsUpsert { track_id: track_id.clone(), plain: found.plain, synced: found.synced, source: LyricsSource::Server, lrclib_id: None },
+        )
+        .await
+        .map_err(|e| format!("DB upsert error : {}", e))?;
+        return Ok(Some(saved));
+    }
+
+    // 6. LRCLIB
     let album = track.album;
     let duration = track.duration.unwrap_or(0.0).round() as u32;
 
@@ -128,7 +142,7 @@ pub async fn get_lyrics(
         return Ok(Some(saved));
     }
 
-    // 6. Repli lyrics.ovh : du texte simple, quand LRCLIB n'a rien eu
+    // 7. Repli lyrics.ovh : du texte simple, quand LRCLIB n'a rien eu
     // (absent, en pause ou en panne). Mieux vaut un texte figé que rien.
     let mut panne = matches!(lrclib, Err(_));
     let ovh = if reglage_actif(&state.pool, "lyrics_ovh").await {

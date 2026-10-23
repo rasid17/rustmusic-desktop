@@ -12,6 +12,8 @@ pub enum LyricsSource {
     /// Paroles simples de lyrics.ovh, quand LRCLIB n'avait rien.
     LyricsOvh,
     Manual,
+    /// Le serveur d'un morceau distant (paroles de ses fichiers).
+    Server,
     None,
 }
 

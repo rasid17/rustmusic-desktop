@@ -175,6 +175,25 @@ pub mod podcast {
     pub mod directory;
     pub mod download;
     pub mod feed;
+    pub mod opml;
     pub mod fetch;
+}
+/// Serveurs Jellyfin : bibliothèques distantes.
+pub mod jellyfin {
+    pub mod catalog;
+    pub mod client;
+}
+pub mod remote;
+/// Serveurs DLNA du réseau (UPnP ContentDirectory) comme bibliothèques distantes.
+pub mod dlna_client {
+    pub mod catalog;
+    pub mod client;
+}
+/// Serveurs OpenSubsonic (Navidrome…) : bibliothèques distantes.
+pub mod subsonic {
+    pub mod catalog;
+    pub mod client;
+    pub mod lyrics;
+    pub mod stream;
 }
 pub mod smart_playlist;
