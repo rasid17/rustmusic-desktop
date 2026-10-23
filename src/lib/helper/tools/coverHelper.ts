@@ -8,13 +8,13 @@ export type CoverSize = '1x' | '2x' | 'full';
 // passe par des data: URLs ; le build de production garde le protocole rapide.
 const COVER_MODE: 'asset' | 'base64' = import.meta.env.DEV ? 'base64' : 'asset';
 
-/** convertFileSrc encode les / en %2F sur Linux → 403. On les décode, puis
- *  on ramène `asset://localhost//home/...` à `asset://localhost/home/...` :
- *  le protocole d'assets rejette le double slash. */
+/** convertFileSrc encode les / en %2F sur Linux → 403. On les décode.
+ *  Le double slash après `localhost` est voulu : Tauri y lit un chemin
+ *  absolu (`/home/...`) et le fait correspondre au scope `$HOME/**`.
+ *  Le supprimer donne `home/...`, que le protocole d'assets refuse. */
 function assetSrc(path: string): string {
     return convertFileSrc(path)
-        .replaceAll('%2F', '/')
-        .replace(/([^:])\/{2,}/g, '$1/');
+        .replaceAll('%2F', '/');
 }
 
 function resolvedPathFor(path: string, size: CoverSize): string {
