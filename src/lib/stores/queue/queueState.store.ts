@@ -237,11 +237,12 @@ export const queueState = {
             console.error("❌ Erreur SQLite lors de la mise à jour de l'index :", err);
         }
     },
-    next: async () => {
+    /** Passe au morceau suivant ; `false` en fin de file (rien après, sans répétition). */
+    next: async (): Promise<boolean> => {
         const qs = get(queueStateWritable);
         const total = qs.tracks.length;
 
-        if (total === 0) return;
+        if (total === 0) return false;
 
         let nextIndex;
 
@@ -256,12 +257,13 @@ export const queueState = {
                 if (qs.repeatMode === "all") {
                     nextIndex = 0;
                 } else {
-                    return;
+                    return false;
                 }
             }
         }
 
         await queueState.setCurrentIndex(nextIndex);
+        return true;
     },
     previous: async () => {
         const qs = get(queueStateWritable);

@@ -51,6 +51,8 @@ import { isMiniWindow } from "#lib/services/mini/miniBridge";
 import { resolveShortcuts, eventToBinding, findAction, type ShortcutAction } from "#lib/config/shortcuts";
 import { applyAccent } from "#lib/helper/theme/accent";
 import SleepTimerButton from "#lib/components/player/SleepTimerButton.svelte";
+import WhatsNewButton from "#lib/components/whatsnew/WhatsNewButton.svelte";
+import { showWhatsNewIfDue } from "#lib/actions/whatsNew/WhatsNewAction";
 import { fade } from "svelte/transition";
 import { openExternalLinks } from "#lib/helper/tools/externalLinks";
 import { lecture } from "#lib/stores/player/playback.store";
@@ -150,6 +152,7 @@ onMount(async () => {
   importProgressStore.init();
   taskProgressStore.init();
   artistImageReadyStore.init();
+  showWhatsNewIfDue();
 
   // Refresh DLNA status (server may have auto-started in Rust setup)
   refreshDlnaStatus();
@@ -309,6 +312,7 @@ function handleKeydown(e: KeyboardEvent) {
         {#if showSleepTimer}
           <SleepTimerButton />
         {/if}
+        <WhatsNewButton />
         <SwitchTheme />
         <ProfilSelectorInput />
       </div>
