@@ -2,7 +2,6 @@
 import { page } from "$app/state";
 import { untrack } from "svelte";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
-import { fade } from "svelte/transition";
 import { profilSelector } from "#lib/stores/profil/profil.store";
 import type { Library } from "#lib/types/db/library/Library";
 import { libraryContentStore } from "#lib/stores/library/libraryContent.store";
@@ -137,7 +136,7 @@ async function importer(chemins: string[]) {
   <div class="flex-1 min-h-0 overflow-hidden">
     <!-- Par route, pas par adresse : passer d'un album au suivant garde la page (et son contenu pendant le chargement). -->
     {#key page.route.id}
-      <div class="h-full" in:fade={{ duration: 120, delay: 60 }}>
+      <div class="h-full">
         {@render children()}
       </div>
     {/key}

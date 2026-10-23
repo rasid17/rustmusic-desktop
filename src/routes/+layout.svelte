@@ -53,7 +53,6 @@ import { applyAccent } from "#lib/helper/theme/accent";
 import SleepTimerButton from "#lib/components/player/SleepTimerButton.svelte";
 import WhatsNewButton from "#lib/components/whatsnew/WhatsNewButton.svelte";
 import { serverStore } from "#lib/stores/mediaServer/mediaServer.store";
-import { fade } from "svelte/transition";
 import { openExternalLinks } from "#lib/helper/tools/externalLinks";
 import { lecture } from "#lib/stores/player/playback.store";
 import { listen } from "@tauri-apps/api/event";
@@ -364,7 +363,7 @@ function handleKeydown(e: KeyboardEvent) {
       <!-- Contenu scrollable avec transition -->
       <div class="flex-1 overflow-hidden">
         {#key cleTransition}
-          <div class="h-full" in:fade={{ duration: 120, delay: 60 }}>
+          <div class="h-full">
             {@render children()}
           </div>
         {/key}

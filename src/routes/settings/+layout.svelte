@@ -3,7 +3,6 @@
   import Icon from "@iconify/svelte";
   import { page } from "$app/state";
   import { afterNavigate, goto } from "$app/navigation";
-  import { fade } from "svelte/transition";
   import { t } from "#lib/i18n";
   import { settingsSections } from "#lib/config/settingsSections";
   import { readTabs } from "#lib/config/libraryTabs";
@@ -114,7 +113,7 @@
 
   <div class="flex-1 min-w-0 overflow-y-auto overflow-x-hidden scrollbar-app">
     {#key actif}
-      <div class="rg-contenu max-w-[820px] mx-auto px-10 max-md:px-6 pt-10 pb-15 flex flex-col gap-7" in:fade={{ duration: 120 }}>
+      <div class="rg-contenu max-w-[820px] mx-auto px-10 max-md:px-6 pt-10 pb-15 flex flex-col gap-7">
         <header class="flex items-end justify-between gap-5">
           <div class="min-w-0">
             <h1 class="text-[34px] leading-[1.2] font-extrabold tracking-[-0.02em] text-(--rg-tx)">{$t(section.labelKey)}</h1>
