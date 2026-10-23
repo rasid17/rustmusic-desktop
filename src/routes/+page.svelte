@@ -22,6 +22,7 @@ import type { LibraryStats } from "#lib/types/ui/library/stats/LibraryStats";
 import type { GenreView } from "#lib/types/ui/library/genre/GenreView";
 import type { GenreMix } from "#lib/types/ui/library/genre/GenreMix";
 import type { AlbumListView } from "#lib/types/ui/library/album/AlbumListView";
+import { homeDataCache } from "#lib/stores/home/homeData.store";
 
 const profil = $derived($profilSelector.profilSelected);
 // `!== 'false'` : sans réglage en base, la section est visible.
@@ -45,20 +46,51 @@ let chargePour: number | null = null;
 $effect(() => {
   const id = libraryId;
   void $importsTermines;
-  if (id !== chargePour) { stats = null; genres = []; mixGenres = []; albums = []; }
+  if (!id) {
+    if (chargePour !== null) { stats = null; genres = []; mixGenres = []; albums = []; }
+    chargePour = null;
+    return;
+  }
+
+  // Au retour sur l'accueil, la dernière photo évite de vider les sections
+  // puis de les repeindre une à une. Le backend confirme ensuite en silence.
+  const connue = homeDataCache.get(id);
+  if (connue) {
+    stats = connue.stats;
+    genres = connue.genres;
+    mixGenres = connue.mixGenres;
+    albums = connue.albums;
+  } else if (id !== chargePour) {
+    stats = null; genres = []; mixGenres = []; albums = [];
+  }
   chargePour = id;
-  if (!id) return;
 
   let perime = false;
   invoke<LibraryStats>('get_library_stats', { libraryId: id })
-    .then((s) => { if (!perime) stats = s; }).catch(() => {});
+    .then((s) => {
+      if (perime) return;
+      stats = s;
+      homeDataCache.set(id, { stats: s });
+    }).catch(() => {});
   invoke<GenreView[]>('get_genres', { libraryId: id })
-    .then((g) => { if (!perime) genres = [...g].sort((a, b) => b.total_tracks - a.total_tracks); })
+    .then((g) => {
+      if (perime) return;
+      genres = [...g].sort((a, b) => b.total_tracks - a.total_tracks);
+      homeDataCache.set(id, { genres });
+    })
     .catch(() => {});
   invoke<GenreMix[]>('get_mix_genres', { libraryId: id })
-    .then((g) => { if (!perime) mixGenres = g; }).catch(() => {});
+    .then((g) => {
+      if (perime) return;
+      mixGenres = g;
+      homeDataCache.set(id, { mixGenres: g });
+    }).catch(() => {});
   invoke<AlbumListView[]>('get_albums', { libraryId: id, missingCover: null })
-    .then((a) => { if (!perime) albums = a; }).catch(() => {});
+    .then((a) => {
+      if (perime) return;
+      albums = a;
+      homeDataCache.set(id, { albums: a });
+    }).catch(() => {});
 
   return () => { perime = true; };
 });

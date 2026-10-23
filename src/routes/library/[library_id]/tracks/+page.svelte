@@ -108,6 +108,16 @@ let suite = $state(false);
 let defilement = $state<HTMLDivElement | null>(null);
 let jeton = 0;
 
+// Un chargement SQLite dépasse rarement deux images : afficher la roue tout de
+// suite produisait un clignotement à chaque retour sur l'onglet. On ne la montre
+// qu'après 150 ms, quand l'attente est réellement perceptible.
+let spinner = $state(false);
+$effect(() => {
+  if (!chargement || tracks.length > 0) { spinner = false; return; }
+  const delai = setTimeout(() => (spinner = true), 150);
+  return () => clearTimeout(delai);
+});
+
 function filterParams() {
   return {
     libraryId,
@@ -330,7 +340,7 @@ const formatNumber = (n: number) => n.toLocaleString($currentLocale);
     <!-- ─── Morceaux, chargés au fil du défilement ─── -->
     <div class="flex-1 relative min-h-0">
       <div class="absolute inset-0 overflow-y-auto scrollbar-app pl-4 md:pl-8 pr-10 md:pr-14 pb-16" bind:this={defilement} onscroll={handleScroll}>
-        {#if chargement && tracks.length === 0}
+        {#if spinner && tracks.length === 0}
           <div class="flex items-center justify-center py-20 text-(--rg-mu)">
             <Icon icon="material-symbols:progress-activity" width="26" class="animate-spin" />
           </div>
