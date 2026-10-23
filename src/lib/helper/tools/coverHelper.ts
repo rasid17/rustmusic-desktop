@@ -11,6 +11,44 @@ function assetSrc(path: string): string {
         .replaceAll('%2F', '/');
 }
 
+function resolvedPathFor(path: string, size: CoverSize): string {
+    return path.replace(/[\/\\]full[\/\\]/, `/${size}/`);
+}
+
+// ── URL finale gardée en mémoire ──
+// Sans elle, chaque remontage de carte redemandait la miniature au backend ;
+// la zone restait vide quelques images, puis l'image apparaissait (le « clignotement »).
+const MAX_ASSETS = 3000;
+const assets = new Map<string, string>();
+
+function assetGet(path: string): string | undefined {
+    const connu = assets.get(path);
+    if (connu === undefined) return undefined;
+    assets.delete(path);
+    assets.set(path, connu);
+    return connu;
+}
+
+function assetSet(path: string, url: string) {
+    if (assets.size >= MAX_ASSETS) assets.delete(assets.keys().next().value!);
+    assets.set(path, url);
+}
+
+/** URL déjà connue, sans attendre le backend. `null` = pas de couverture, `undefined` = inconnue. */
+export function coverSrcCached(
+    path: string | null | undefined,
+    size: CoverSize = 'full',
+): string | null | undefined {
+    if (!path) return null;
+
+    const resolvedPath = resolvedPathFor(path, size);
+    if (resolvedPath.startsWith("http") || resolvedPath.startsWith("data:") || resolvedPath.startsWith("blob:")) return resolvedPath;
+    if (path.startsWith("/images/")) return path;
+
+    if (COVER_MODE === 'asset') return assetGet(resolvedPath);
+    return lruGet(resolvedPath);
+}
+
 // ── Mode base64 (fallback) ──
 const MAX_CACHE = 300;
 const pending = new Map<string, Promise<string>>();
@@ -36,6 +74,9 @@ const MAX_MINIATURES = 2000;
 const miniatures = new Map<string, Promise<string>>();
 
 function miniature(chemin: string, original: string): Promise<string> {
+    const deja = assetGet(chemin);
+    if (deja) return Promise.resolve(deja);
+
     const connue = miniatures.get(chemin);
     if (connue) {
         miniatures.delete(chemin);
@@ -44,13 +85,16 @@ function miniature(chemin: string, original: string): Promise<string> {
     }
     const p = invoke<string>("resolve_cover_thumbnail", { path: chemin })
         .then((reel) => {
-            // Miniature encore en génération : le backend rend la grande, on redemandera.
-            if (reel !== chemin) miniatures.delete(chemin);
-            return assetSrc(reel);
+            const url = assetSrc(reel);
+            assetSet(chemin, url);
+            miniatures.delete(chemin);
+            return url;
         })
         .catch(() => {
             miniatures.delete(chemin);
-            return assetSrc(original);
+            const url = assetSrc(original);
+            assetSet(chemin, url);
+            return url;
         });
     if (miniatures.size >= MAX_MINIATURES) miniatures.delete(miniatures.keys().next().value!);
     miniatures.set(chemin, p);
@@ -88,7 +132,7 @@ export function resolveBlurredCover(
 export async function resolveCoverSrc(path: string | null | undefined, size: CoverSize = 'full'): Promise<string | null> {
     if (!path) return null;
 
-    const resolvedPath = path.replace(/[\/\\]full[\/\\]/, `/${size}/`);
+    const resolvedPath = resolvedPathFor(path, size);
 
     if (resolvedPath.startsWith("http") || resolvedPath.startsWith("data:") || resolvedPath.startsWith("blob:")) return resolvedPath;
     // Image de l'interface (« pas de CD ») : servie telle quelle, ce n'est pas un fichier du disque.
@@ -98,7 +142,11 @@ export async function resolveCoverSrc(path: string | null | undefined, size: Cov
     if (COVER_MODE === 'asset') {
         // Miniature (1x/2x) générée à la volée ; la grande en cas d'échec.
         if (size !== 'full') return miniature(resolvedPath, path);
-        return assetSrc(resolvedPath);
+        const deja = assetGet(resolvedPath);
+        if (deja) return deja;
+        const url = assetSrc(resolvedPath);
+        assetSet(resolvedPath, url);
+        return url;
     }
 
     // Mode base64 (fallback)
