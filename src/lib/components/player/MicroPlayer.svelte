@@ -21,20 +21,62 @@
 
   // Linux : WebKitGTK garde le survol quand le pointeur quitte la fenêtre ; GTK signale la sortie.
   const gtkHover = detectOS() === "linux";
-  let pointerInside = $state(true);
+  let pointerInside = $state(false);
+  let lastPointer = { x: NaN, y: NaN };
+  let ignoreMoveUntil = 0;
+
+  function setPointerInside(inside: boolean) {
+    pointerInside = inside;
+    if (!inside) {
+      lastPointer = { x: NaN, y: NaN };
+      ignoreMoveUntil = performance.now() + 120;
+      (document.activeElement as HTMLElement | null)?.blur?.();
+    }
+  }
+
   $effect(() => {
     if (!gtkHover) return;
-    const off = listen<boolean>("window-pointer", (e) => (pointerInside = e.payload));
-    return () => void off.then((f) => f());
+    const off = listen<boolean>("window-pointer", (e) => setPointerInside(e.payload));
+    const onDocLeave = () => setPointerInside(false);
+    const onWinBlur = () => setPointerInside(false);
+    document.documentElement.addEventListener("mouseleave", onDocLeave);
+    window.addEventListener("blur", onWinBlur);
+    return () => {
+      void off.then((f) => f());
+      document.documentElement.removeEventListener("mouseleave", onDocLeave);
+      window.removeEventListener("blur", onWinBlur);
+    };
   });
+
   // WebKit rejoue de faux mouvements à la dernière position connue : seul un vrai déplacement réaffiche.
-  let lastPointer = { x: NaN, y: NaN };
   function onPointerMove(e: PointerEvent) {
-    if (!gtkHover || (e.screenX === lastPointer.x && e.screenY === lastPointer.y)) return;
-    lastPointer = { x: e.screenX, y: e.screenY };
+    if (!gtkHover) return;
+    if (performance.now() < ignoreMoveUntil) return;
+    if (e.clientX <= 1 || e.clientY <= 1 || e.clientX >= window.innerWidth - 1 || e.clientY >= window.innerHeight - 1) {
+      return;
+    }
+    if (Number.isNaN(lastPointer.x)) {
+      lastPointer = { x: e.clientX, y: e.clientY };
+      return;
+    }
+    if (e.clientX === lastPointer.x && e.clientY === lastPointer.y) return;
+    lastPointer = { x: e.clientX, y: e.clientY };
     pointerInside = true;
   }
-  const hoverShow = $derived(gtkHover ? (pointerInside ? "opacity-100" : "") : "group-hover:opacity-100");
+
+  function onPointerEnter(e: PointerEvent) {
+    if (!gtkHover) return;
+    if (performance.now() < ignoreMoveUntil) return;
+    lastPointer = { x: e.clientX, y: e.clientY };
+    pointerInside = true;
+  }
+
+  function onPointerLeave() {
+    if (!gtkHover) return;
+    setPointerInside(false);
+  }
+
+  const hoverShow = $derived(gtkHover ? (pointerInside ? "opacity-100" : "pointer-events-none") : "group-hover:opacity-100");
   const hoverHide = $derived(gtkHover ? (pointerInside ? "opacity-0" : "") : "group-hover:opacity-0");
 
   const hasTrack = $derived(!!$player?.pathFile);
@@ -103,14 +145,17 @@
   style:--ls={$couleurMorceau.s}
   role="presentation"
   onpointerdown={onPointerDown}
+  onpointerenter={onPointerEnter}
   onpointermove={onPointerMove}
+  onpointerleave={onPointerLeave}
+  onmouseleave={onPointerLeave}
   onwheel={onWheel}
 >
   <img src={hasTrack && coverSrc ? coverSrc : NO_COVER} alt="" class="absolute inset-0 w-full h-full object-cover pointer-events-none"
        onerror={(e) => ((e.currentTarget as HTMLImageElement).src = NO_COVER)} />
 
-  <!-- Voile et commandes au survol ; au clavier seulement pour le focus : un bouton cliqué le garde -->
-  <div class="absolute inset-0 flex flex-col opacity-0 {hoverShow} has-[:focus-visible]:opacity-100 transition-opacity duration-200
+  <!-- Voile et commandes au survol -->
+  <div class="absolute inset-0 flex flex-col opacity-0 {hoverShow} transition-opacity duration-200
               bg-[linear-gradient(to_bottom,rgba(0,0,0,0.7),rgba(0,0,0,0.5)_35%,rgba(0,0,0,0.5)_65%,rgba(0,0,0,0.75))]">
     <div class="flex items-center gap-0.5 p-1.5">
       {#if hasTrack}
