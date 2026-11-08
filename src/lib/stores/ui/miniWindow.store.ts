@@ -128,6 +128,9 @@ async function setH(h: number): Promise<void> {
 
 /** Garde la fenêtre entière dans la zone de travail de l'écran : collée au bord, elle ne déborde plus en grandissant. */
 async function keepOnScreen(width: number, height: number): Promise<void> {
+  // Sous Wayland/Linux, le compositeur gère seul le placement des fenêtres :
+  // `outerPosition` et `setPosition` n'y ont pas d'effet et bloquent pendant le délai d'attente.
+  if (gtkSize) return;
   try {
     const win = getCurrentWindow();
     const monitor = await currentMonitor();

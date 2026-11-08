@@ -26,9 +26,9 @@
   let replie = $derived($settingsStore.sidebar_collapsed === 'true');
 
   // Style résolu : 'auto' → en fonction de l'OS, sinon valeur explicite
-  let effectiveStyle = $derived.by<'macos' | 'windows' | 'linux'>(() => {
+  let effectiveStyle = $derived.by<'macos' | 'windows' | 'linux' | 'none'>(() => {
     const setting = $settingsStore.window_controls_style;
-    if (setting === 'macos' || setting === 'windows' || setting === 'linux') return setting;
+    if (setting === 'macos' || setting === 'windows' || setting === 'linux' || setting === 'none') return setting;
     // 'auto' : Mac → traffic lights, Linux → boutons ronds GNOME, sinon → Windows
     if (osDetected === 'macos') return 'macos';
     if (osDetected === 'linux') return 'linux';
@@ -42,15 +42,27 @@
 
   // Suit l'état réel : bouton, Win+↑, double clic ou fenêtre tirée vers le haut.
   $effect(() => {
+    let debounceTimer: ReturnType<typeof setTimeout> | null = null;
     const syncState = () => {
       appWindow.isMaximized().then((v) => { isMaximized = v; }).catch(() => {});
       appWindow.isFullscreen().then((v) => { isFullscreen = v; }).catch(() => {});
     };
+    const scheduleSync = () => {
+      if (debounceTimer !== null) clearTimeout(debounceTimer);
+      debounceTimer = setTimeout(() => {
+        debounceTimer = null;
+        syncState();
+      }, 100);
+    };
     syncState();
     let arreter: (() => void) | null = null;
     let fini = false;
-    appWindow.onResized(syncState).then((u) => { if (fini) u(); else arreter = u; }).catch(() => {});
-    return () => { fini = true; arreter?.(); };
+    appWindow.onResized(scheduleSync).then((u) => { if (fini) u(); else arreter = u; }).catch(() => {});
+    return () => {
+      fini = true;
+      if (debounceTimer !== null) clearTimeout(debounceTimer);
+      arreter?.();
+    };
   });
 
   function minimize() { appWindow.minimize(); }
@@ -122,7 +134,7 @@
   role="toolbar"
   tabindex="-1"
   class="relative z-30 flex items-center h-15 select-none shrink-0
-         bg-(--c-barre) dark:bg-zinc-950/50 backdrop-blur-md
+         bg-(--c-barre) dark:bg-zinc-950
          border-b border-(--c-bord) dark:border-white/6"
   ondblclick={handleDoubleClick}
 >
@@ -157,8 +169,18 @@
 
   {#if effectivePosition === 'right'}{@render separateur()}{/if}
 
+  <!-- ─── Contrôles : aucun (compositeurs tuilés : seul le bouton mini-lecteur reste) ─── -->
+  {#if effectiveStyle === 'none'}
+    <div
+      class="flex items-center px-3 h-full"
+      class:ml-auto={effectivePosition === 'right'}
+      class:order-first={effectivePosition === 'left'}
+    >
+      {@render miniPlayerButton('linux')}
+    </div>
+
   <!-- ─── Contrôles : style macOS (traffic lights) ─── -->
-  {#if effectiveStyle === 'macos'}
+  {:else if effectiveStyle === 'macos'}
     <div
       class="flex items-center gap-2 px-4 h-full"
       class:ml-auto={effectivePosition === 'right'}

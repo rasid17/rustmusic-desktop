@@ -838,9 +838,25 @@ class PlayerService {
     // ==========================================
     // 🎞 RAF JS
     // ==========================================
+    private animationSuspended = false;
+
+    setAnimationSuspended(suspended: boolean) {
+        this.animationSuspended = suspended;
+        if (suspended) {
+            this.stopAnimation();
+            return;
+        }
+        const p = get(player);
+        if (p.status === "playing" && !p.isPreparing) {
+            player.update({ jsPosition: p.rustPosition });
+            this.startAnimation();
+        }
+    }
+
     private startAnimation() {
 
         this.stopAnimation();
+        if (this.animationSuspended) return;
 
         basePos = get(player).rustPosition;
         baseTime = Date.now();

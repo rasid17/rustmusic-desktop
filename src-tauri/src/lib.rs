@@ -255,10 +255,13 @@ async fn configure_render_pipeline(app_state: &AppState, db_mode: crate::core::r
     let mode = env_mode.unwrap_or(db_mode);
     let src = if env_mode.is_some() { "env" } else { "user" };
 
-    // Consume the crash sentinel : if it's still armed here, the previous GPU
-    // boot aborted (EGL crash) or never painted the UI (white window killed
-    // by the user). Record the failure so Auto stays on software afterwards.
-    let previous_gpu_boot_failed = gpu_sentinel::is_armed();
+    // Consume the crash sentinel : if consecutive unconfirmed GPU boots reached
+    // the threshold (or an explicit WebKit crash was recorded), persist the
+    // failure so Auto stays on software afterwards. A single interrupted boot
+    // (e.g. `pkill` during startup) increments the counter instead of locking
+    // the user into software mode.
+    let prev_attempts = gpu_sentinel::previous_attempts();
+    let previous_gpu_boot_failed = prev_attempts >= gpu_sentinel::MAX_UNCONFIRMED_BOOTS;
     gpu_sentinel::disarm();
 
     let remembered_failure = SettingsRepository::get(&app_state.pool, gpu_sentinel::GPU_BOOT_FAILED_KEY)
@@ -295,9 +298,10 @@ async fn configure_render_pipeline(app_state: &AppState, db_mode: crate::core::r
     };
 
     if !force_software {
-        // Arm the crash sentinel. It is disarmed by the frontend once real
-        // frames have been painted (`notify_ui_ready`) or on graceful close.
-        gpu_sentinel::arm();
+        // Arm the crash sentinel with the incremented attempt count. It is
+        // disarmed by the frontend once real frames have been painted
+        // (`notify_ui_ready`) or on graceful close.
+        gpu_sentinel::arm_with_count(prev_attempts.saturating_add(1));
         gpu_sentinel::set_booted_gpu(true);
     }
 
@@ -333,16 +337,20 @@ fn apply_linux_render_env(force_software: bool, reason: &str, dmabuf: &str, flat
         // CPU » moderne. Inconnue des vieux WebKit = ignorée, donc sans risque.
         std::env::set_var("WEBKIT_SKIA_ENABLE_CPU_RENDERING", "1");
         std::env::set_var("LIBGL_ALWAYS_SOFTWARE", "1");
-        // X11 seulement s'il est joignable : en Flatpak sous Wayland (`fallback-x11`),
-        // ou sur une session Wayland sans XWayland, `DISPLAY` est vide et forcer
-        // X11 faisait échouer l'initialisation de GTK. Un choix explicite prime.
+        // X11 seulement si l'on n'est pas déjà sur une session Wayland native et
+        // que DISPLAY est joignable : forcer X11 et GDK_SCALE=1 sous Wayland
+        // (niri, Hyprland, GNOME Wayland) basculait l'application dans XWayland
+        // sans mise à l'échelle HiDPI. Un choix explicite de l'utilisateur prime.
+        let wayland_session = std::env::var_os("WAYLAND_DISPLAY").is_some();
         let x11_joignable = std::env::var("DISPLAY").is_ok_and(|d| !d.is_empty());
-        if x11_joignable && std::env::var_os("GDK_BACKEND").is_none() {
+        if !wayland_session && x11_joignable && std::env::var_os("GDK_BACKEND").is_none() {
             std::env::set_var("GDK_BACKEND", "x11");
         }
-        // Fix recurring `gtk_widget_get_scale_factor failed` warning loop
-        // when GTK can't query the scale from a non-existent compositor.
-        std::env::set_var("GDK_SCALE", "1");
+        if !wayland_session {
+            // Fix recurring `gtk_widget_get_scale_factor failed` warning loop
+            // when GTK can't query the scale from a non-existent compositor.
+            std::env::set_var("GDK_SCALE", "1");
+        }
     } else {
         // DMA-BUF : sans lui, chaque image est recopiée par le processeur (17 au
         // lieu de 37 images/s au défilement en 4K). Coupé là où le pilote le gère
@@ -433,10 +441,11 @@ fn focus_existing_window(app: &tauri::AppHandle, _args: Vec<String>, _cwd: Strin
     eprintln!("   Windows trouvées : {}", windows.len());
 
     for (label, window) in windows {
-        // Le mini-lecteur ne se « réveille » pas : il se ferme, et la fenêtre
+        // Le mini-lecteur ne se « réveille » pas : il se masque, et la fenêtre
         // principale masquée réapparaît (événement `mini-window-closed`).
         if label == MINI_LABEL {
-            let _ = window.destroy();
+            crate::commands::mini_window::close_mini_window(app.clone());
+            let _ = tauri::Emitter::emit(app, "mini-window-closed", ());
             continue;
         }
 
@@ -459,12 +468,16 @@ fn focus_existing_window(app: &tauri::AppHandle, _args: Vec<String>, _cwd: Strin
         }
 
         // Bypass focus-stealing Windows
-        let _ = window.set_always_on_top(true);
-        std::thread::sleep(std::time::Duration::from_millis(100));
+        #[cfg(target_os = "windows")]
+        {
+            let _ = window.set_always_on_top(true);
+            std::thread::sleep(std::time::Duration::from_millis(100));
+        }
         match window.set_focus() {
             Ok(_) => eprintln!("   ✓ set_focus OK"),
             Err(e) => eprintln!("   ✗ set_focus ERR: {}", e),
         }
+        #[cfg(target_os = "windows")]
         let _ = window.set_always_on_top(false);
 
         // Flash icône taskbar comme dernier recours
@@ -576,12 +589,8 @@ pub async fn run() {
         // production.
         .plugin(
             tauri_plugin_window_state::Builder::default()
-                .with_state_flags(
-                    tauri_plugin_window_state::StateFlags::SIZE
-                        | tauri_plugin_window_state::StateFlags::POSITION
-                        | tauri_plugin_window_state::StateFlags::MAXIMIZED
-                        | tauri_plugin_window_state::StateFlags::FULLSCREEN,
-                )
+                .with_denylist(&[MINI_LABEL])
+                .with_state_flags(crate::core::window_geometry::flags())
                 .build(),
         )
         .plugin(tauri_plugin_opener::init())
@@ -630,10 +639,9 @@ pub async fn run() {
                 .on_menu_event(|app: &tauri::AppHandle, event: tauri::menu::MenuEvent| {
                     match event.id().as_ref() {
                         "show" => {
-                            // Le mini-lecteur cède la place : sa fermeture ramène la fenêtre principale.
-                            if let Some(mini) = app.get_webview_window(MINI_LABEL) {
-                                let _ = mini.destroy();
-                            }
+                            // Le mini-lecteur cède la place : son masquage ramène la fenêtre principale.
+                            crate::commands::mini_window::close_mini_window(app.clone());
+                            let _ = tauri::Emitter::emit(app, "mini-window-closed", ());
                             if let Some(window) = app.get_webview_window("main") {
                                 window.show().unwrap_or_default();
                                 window.set_focus().unwrap_or_default();
@@ -645,10 +653,20 @@ pub async fn run() {
                         _ => {}
                     }
                 })
-                .on_tray_icon_event(|_tray, event: tauri::tray::TrayIconEvent| {
-                    if let tauri::tray::TrayIconEvent::Click { button: tauri::tray::MouseButton::Left, .. } = event {
-                        // Le tray icon event ne donne pas facilement accès au window
-                        // On utilise le menu "Afficher" pour ça
+                .on_tray_icon_event(|tray, event: tauri::tray::TrayIconEvent| {
+                    if let tauri::tray::TrayIconEvent::Click {
+                        button: tauri::tray::MouseButton::Left,
+                        button_state: tauri::tray::MouseButtonState::Up,
+                        ..
+                    } = event
+                    {
+                        let app = tray.app_handle();
+                        crate::commands::mini_window::close_mini_window(app.clone());
+                        let _ = tauri::Emitter::emit(app, "mini-window-closed", ());
+                        if let Some(window) = app.get_webview_window("main") {
+                            window.show().unwrap_or_default();
+                            window.set_focus().unwrap_or_default();
+                        }
                     }
                 })
                 .build(app)?;
@@ -688,7 +706,7 @@ pub async fn run() {
                             // Ceinture + bretelles : la sentinelle force le
                             // fallback au prochain boot même si l'écriture DB
                             // ci-dessous échoue.
-                            crate::core::gpu_sentinel::arm();
+                            crate::core::gpu_sentinel::arm_crashed();
                             let app_handle = app_handle.clone();
                             tauri::async_runtime::spawn(async move {
                                 let state = app_handle.state::<AppState>();
@@ -766,12 +784,26 @@ pub async fn run() {
                 // dans la zone de notification, et peut donc survivre à la
                 // fermeture de sa fenêtre. Le moment sûr, c'est **maintenant** —
                 // la fenêtre existe encore, ses dimensions sont lisibles.
-                crate::core::window_geometry::save_now(window.app_handle());
+                if window.label() == "main" {
+                    crate::core::window_geometry::save_now(window.app_handle());
+                }
             }
 
             // Et au fil des redimensionnements : l'appli finit souvent sans sortie propre.
-            if matches!(event, tauri::WindowEvent::Resized(_) | tauri::WindowEvent::Moved(_)) {
+            if window.label() == "main"
+                && (matches!(event, tauri::WindowEvent::Resized(_))
+                    || (!crate::core::window_geometry::is_wayland()
+                        && matches!(event, tauri::WindowEvent::Moved(_))))
+            {
                 crate::core::window_geometry::schedule_save(window.app_handle().clone());
+            }
+
+            // Si la fenêtre principale est détruite, détruire aussi la fenêtre mini
+            // gardée en cache pour que le processus se termine proprement.
+            if window.label() == "main" && matches!(event, tauri::WindowEvent::Destroyed) {
+                if let Some(mini) = window.app_handle().get_webview_window(MINI_LABEL) {
+                    let _ = mini.destroy();
+                }
             }
         })
         .invoke_handler(tauri::generate_handler![

@@ -60,8 +60,9 @@ pub fn acquire(card: u32) -> Result<(), String> {
         return Ok(());
     }
 
-    let sinks = read_sink_names(card);
-    let restore = match read_cards()?.into_iter().find(|c| c.0 == card).map(|c| c.1) {
+    let objects = dump_objects()?;
+    let sinks: Vec<String> = objects.iter().filter_map(|o| parse_sink_name(o, card)).collect();
+    let restore = match objects.iter().filter_map(parse_card).find(|c| c.0 == card).map(|c| c.1) {
         None => None,
         Some(found) if found.profile == PROFILE_OFF => None,
         Some(found) => {
@@ -174,25 +175,16 @@ fn restore_profile(restore: &Restore) {
     forget(&restore.device);
 }
 
-fn read_cards() -> Result<Vec<(u32, Card)>, String> {
+fn dump_objects() -> Result<Vec<Value>, String> {
     let output = Command::new("pw-dump").output().map_err(|e| format!("pw-dump : {e}"))?;
     if !output.status.success() {
         return Err(format!("pw-dump : {}", output.status));
     }
-    let objects: Vec<Value> =
-        serde_json::from_slice(&output.stdout).map_err(|e| format!("pw-dump illisible : {e}"))?;
-    Ok(objects.iter().filter_map(parse_card).collect())
+    serde_json::from_slice(&output.stdout).map_err(|e| format!("pw-dump illisible : {e}"))
 }
 
-/// Les « node.description » des sorties Audio/Sink de cette carte, telles que
-/// PipeWire les expose à l'instant de l'appel (après la prise, il n'y en a plus).
-fn read_sink_names(card: u32) -> Vec<String> {
-    let Ok(output) = Command::new("pw-dump").output() else { return Vec::new() };
-    if !output.status.success() {
-        return Vec::new();
-    }
-    let Ok(objects) = serde_json::from_slice::<Vec<Value>>(&output.stdout) else { return Vec::new() };
-    objects.iter().filter_map(|o| parse_sink_name(o, card)).collect()
+fn read_cards() -> Result<Vec<(u32, Card)>, String> {
+    Ok(dump_objects()?.iter().filter_map(parse_card).collect())
 }
 
 fn parse_sink_name(object: &Value, card: u32) -> Option<String> {
@@ -240,12 +232,7 @@ fn number(value: &Value) -> Option<u32> {
 /// Carte et périphérique ALSA de la sortie PipeWire qui porte ce nom. Le nom vient
 /// souvent de la base USB (« Fiio E10 ») et pas de la carte (« DigiHug USB Audio »).
 pub fn alsa_pcm_for(name: &str) -> Option<(u32, u32)> {
-    let output = Command::new("pw-dump").output().ok()?;
-    if !output.status.success() {
-        return None;
-    }
-    let objects: Vec<Value> = serde_json::from_slice(&output.stdout).ok()?;
-    objects.iter().find_map(|o| parse_alsa_sink(o, name))
+    dump_objects().ok()?.iter().find_map(|o| parse_alsa_sink(o, name))
 }
 
 fn parse_alsa_sink(object: &Value, name: &str) -> Option<(u32, u32)> {

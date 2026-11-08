@@ -21,8 +21,8 @@ const MINI_H: f64 = 250.0;
 #[tauri::command]
 pub fn open_mini_window(app: AppHandle, pinned: bool) -> Result<(), String> {
     if let Some(w) = app.get_webview_window(MINI_LABEL) {
-        let _ = w.show();
-        let _ = w.set_focus();
+        let _ = w.set_always_on_top(pinned);
+        let _ = app.emit_to(MINI_LABEL, "mini-reopen", ());
         return Ok(());
     }
 
@@ -44,13 +44,22 @@ pub fn open_mini_window(app: AppHandle, pinned: bool) -> Result<(), String> {
         .map_err(|e| format!("création de la fenêtre mini : {e}"))?;
     log::info!("🪟  Fenêtre mini créée (épinglée : {pinned})");
 
-    // Fermeture brutale (compositeur, Alt+F4) : la fenêtre principale, masquée,
-    // doit le savoir pour réapparaître.
+    // Fermeture depuis le compositeur (Mod+Q sous niri/Hyprland, Alt+F4) :
+    // on masque la fenêtre mini pour la garder chaude en mémoire, et on
+    // prévient la fenêtre principale pour qu'elle réapparaisse.
     let handle = app.clone();
-    window.on_window_event(move |event| {
-        if let tauri::WindowEvent::Destroyed = event {
+    let win_for_event = window.clone();
+    window.on_window_event(move |event| match event {
+        tauri::WindowEvent::CloseRequested { api, .. } => {
+            api.prevent_close();
+            let _ = win_for_event.hide();
+            let _ = handle.emit_to(MINI_LABEL, "mini-suspend", ());
             let _ = handle.emit("mini-window-closed", ());
         }
+        tauri::WindowEvent::Destroyed => {
+            let _ = handle.emit("mini-window-closed", ());
+        }
+        _ => {}
     });
 
     wire_pointer_events(&app, &window);
@@ -60,7 +69,8 @@ pub fn open_mini_window(app: AppHandle, pinned: bool) -> Result<(), String> {
 #[tauri::command]
 pub fn close_mini_window(app: AppHandle) {
     if let Some(w) = app.get_webview_window(MINI_LABEL) {
-        let _ = w.destroy();
+        let _ = app.emit_to(MINI_LABEL, "mini-suspend", ());
+        let _ = w.hide();
     }
 }
 
@@ -70,10 +80,11 @@ pub fn close_mini_window(app: AppHandle) {
 #[cfg(target_os = "linux")]
 fn wire_pointer_events(app: &AppHandle, window: &tauri::WebviewWindow) {
     use gtk::gdk::{EventMask, NotifyType};
-    use gtk::prelude::{WidgetExt, WidgetExtManual};
+    use gtk::prelude::{GtkWindowExt, WidgetExt, WidgetExtManual};
     let Ok(gtk_window) = window.gtk_window() else {
         return;
     };
+    gtk_window.set_role("picture-in-picture");
     gtk_window.add_events(EventMask::ENTER_NOTIFY_MASK | EventMask::LEAVE_NOTIFY_MASK);
     let handle = app.clone();
     gtk_window.connect_enter_notify_event(move |_, event| {

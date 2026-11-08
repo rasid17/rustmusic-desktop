@@ -92,9 +92,16 @@ export function startMiniBridge(handlers: MiniBridgeHandlers): void {
   dernierePiste = undefined;
   lastTracksRef = null;
   prevLiked = new Set(get(liked).paths);
+  let lastPlayerSig = "";
 
   unsubscribes.push(
     player.subscribe((p) => {
+      // Ignorer les rafraîchissements de `jsPosition` seul (10×/s) : la fenêtre
+      // mini anime sa propre barre de progression et ne doit recevoir que les
+      // vrais changements d'état ou le repère `rustPosition` (1×/s).
+      const sig = `${p.status}|${p.pathFile ?? ""}|${p.duration}|${p.rustPosition}|${p.isPreparing}|${p.trackId ?? ""}|${p.lastUpdateTime ?? 0}`;
+      if (sig === lastPlayerSig) return;
+      lastPlayerSig = sig;
       const complet = p.pathFile !== dernierePiste;
       dernierePiste = p.pathFile;
       const snap: PlayerSnapshot = {
@@ -255,7 +262,7 @@ export function notifyMainReady(): void {
   emitTo("main", "mini-ready").catch(noop);
 }
 
-export function initMiniClient(): MiniClient {
+export function initMiniClient(onReopen?: () => void): MiniClient {
   const unlistenFns: UnlistenFn[] = [];
   let firstResolve: () => void = () => {};
   const firstState = new Promise<void>((r) => (firstResolve = r));
@@ -266,6 +273,7 @@ export function initMiniClient(): MiniClient {
     firstResolve();
   };
   const filet = setTimeout(premier, 800);
+  let reopenPending = false;
 
   // Animation locale de la position : la fenêtre principale masquée n'envoie
   // que des repères à la seconde ; la fluidité est recalculée ici, avec la
@@ -325,6 +333,10 @@ export function initMiniClient(): MiniClient {
       await listen<PlayerSnapshot>("mini-state-player", (e) => {
         appliquerSnapshot(e.payload);
         premier();
+        if (reopenPending) {
+          reopenPending = false;
+          onReopen?.();
+        }
       })
     );
     unlistenFns.push(
@@ -345,6 +357,24 @@ export function initMiniClient(): MiniClient {
           else miroirLiked.delete(c.path);
         }
         liked.hydrate(new Set(miroirLiked));
+      })
+    );
+    unlistenFns.push(
+      await listen("mini-suspend", () => {
+        reopenPending = false;
+        stopAnimation();
+      })
+    );
+    unlistenFns.push(
+      await listen("mini-reopen", () => {
+        reopenPending = true;
+        emitTo("main", "mini-hello").catch(noop);
+        setTimeout(() => {
+          if (reopenPending) {
+            reopenPending = false;
+            onReopen?.();
+          }
+        }, 120);
       })
     );
     emitTo("main", "mini-hello").catch(noop);

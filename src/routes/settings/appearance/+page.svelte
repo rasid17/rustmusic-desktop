@@ -97,8 +97,8 @@
 
   // ─── Boutons de fenêtre : « Auto » montre ce que donne le système détecté ───
   const os = detectOS();
-  type StyleFenetre = "macos" | "windows" | "linux";
-  const styleSysteme: StyleFenetre = os === "macos" ? "macos" : os === "linux" ? "linux" : "windows";
+  type StyleFenetre = "macos" | "windows" | "linux" | "none";
+  const styleSysteme = os === "macos" ? "macos" : os === "linux" ? "linux" : "windows";
   const nomsStyles = { macos: "macOS", windows: "Windows", linux: "Linux" } as const;
   const stylesFenetre = $derived<{ valeur: string; apercu: StyleFenetre; label: string; title?: string }[]>([
     {
@@ -106,6 +106,9 @@
       title: $t("settings.window_controls_auto_hint").replace("{os}", nomsStyles[styleSysteme]),
     },
     ...(["macos", "windows", "linux"] as const).map((v) => ({ valeur: v, apercu: v, label: nomsStyles[v] })),
+    {
+      valeur: "none", apercu: "none", label: $t("source.none"),
+    },
   ]);
   const cotePosition = $derived($settingsStore.window_controls_position === "left" ? "left" : "right");
 
@@ -344,7 +347,7 @@
 <!-- ─── Fenêtre ─── -->
 <OptionGroup title={$t("settings.window_group")} hint={$t("settings.window_group_hint")}>
   <OptionBlock keywords="{$t('settings.window_controls_style')} {$t('settings.window_group_hint')} macos windows linux" class="p-4">
-    <div class="grid grid-cols-4 max-sm:grid-cols-2 gap-3" role="radiogroup" aria-label={$t("settings.window_controls_style")}>
+    <div class="grid grid-cols-5 max-md:grid-cols-3 max-sm:grid-cols-2 gap-3" role="radiogroup" aria-label={$t("settings.window_controls_style")}>
       {#each stylesFenetre as st (st.valeur)}
         <ChoiceCard
           label={st.label}

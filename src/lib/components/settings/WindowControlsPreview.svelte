@@ -1,6 +1,6 @@
 <script lang="ts">
   // Fenêtre en miniature : boutons dans le style et du côté choisis, dessinés comme la barre de titre.
-  let { style, position }: { style: "macos" | "windows" | "linux"; position: "left" | "right" } = $props();
+  let { style, position }: { style: "macos" | "windows" | "linux" | "none"; position: "left" | "right" } = $props();
 
   const glyphs = {
     minimize: "M2 6h8",
@@ -30,7 +30,11 @@
     <span class="mx-2.5 w-8 min-w-1 h-2 shrink rounded-full bg-accent-500"></span>
     <span class="flex-1"></span>
 
-    {#if style === "macos"}
+    {#if style === "none"}
+      <span class="shrink-0 flex items-center px-2">
+        <span class="w-4 h-4 rounded-full bg-neutral-200/70 dark:bg-white/8"></span>
+      </span>
+    {:else if style === "macos"}
       <span class="shrink-0 flex items-center gap-1.5 px-2.5">
         {#each MAC_LIGHTS as light (light.fill)}
           <span class="w-3 h-3 rounded-full" style="background: {light.fill}; color: {light.glyph}">

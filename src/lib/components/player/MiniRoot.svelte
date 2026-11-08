@@ -53,25 +53,29 @@
     // L'écran de chargement d'app.html n'a pas lieu d'être : le lecteur est déjà là.
     document.getElementById("demarrage")?.remove();
 
+    const win = getCurrentWindow();
+    const afficher = async () => {
+      await win.show();
+      await win.setFocus();
+      // La fenêtre principale attend ce signal pour se masquer.
+      notifyMainReady();
+    };
+
     await settingsStore.init();
     initVolumeSync();
     void loadVolume();
     initPlaybackPipelineListener();
-    const client = initMiniClient();
+    const client = initMiniClient(() => void afficher());
 
     // Attendre le premier état évite d'afficher une fenêtre vide ; le pont a
     // son propre filet (800 ms) si la fenêtre principale ne répond pas.
     await client.firstState;
-    const win = getCurrentWindow();
-    await win.show();
-    await win.setFocus();
-    // La fenêtre principale attend ce signal pour se masquer.
-    notifyMainReady();
+    await afficher();
 
     // GTK3 n'honore les tailles demandées au widget que si la fenêtre a été
     // rendue non redimensionnable en cours de session (comme la principale en
     // entrant en mode mini) : figée une fois affichée, sans bords saisissables.
-    await getCurrentWindow().setResizable(false);
+    await win.setResizable(false);
   });
 </script>
 

@@ -44,7 +44,9 @@
     "preview": "vite preview",
     "check": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json",
     "check:watch": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json --watch",
-    "tauri": "tauri"
+    "tauri": "tauri",
+    "build:arch": "tauri build --no-bundle --config '{\"bundle\":{\"createUpdaterArtifacts\":false}}' && mkdir -p src-tauri/target/release/bundle/arch && cd packaging/arch && PKGDEST=\"$PWD/../../src-tauri/target/release/bundle/arch\" BUILDDIR=/tmp/rustmusic-arch-build makepkg -f",
+    "install:arch": "npm run build:arch && sudo pacman -U --noconfirm src-tauri/target/release/bundle/arch/rustmusic-*.pkg.tar.zst"
   },
   "license": "GPL-3.0-only",
   "dependencies": {

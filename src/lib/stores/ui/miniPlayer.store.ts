@@ -16,12 +16,17 @@ import { invoke } from "@tauri-apps/api/core";
 import { startMiniBridge, stopMiniBridge, waitMiniReady } from "#lib/services/mini/miniBridge";
 import { readMiniPinned } from "#lib/stores/ui/miniWindow.store";
 import { settingsStore } from "#lib/stores/settings/settings.store";
+import { playerService } from "#lib/services/player/player.service";
+import { detectOS } from "#lib/helper/tools/osDetection";
 
 export const miniPlayerActive = writable(false);
 
 /** Plancher du mode normal : en dessous, l'interface n'est plus utilisable. */
 const NORMAL_MIN_W = 800;
 const NORMAL_MIN_H = 560;
+/** Plancher souple sous Linux pour les colonnes étroites des compositeurs tuilés (niri, Hyprland, Sway). */
+const TILING_MIN_W = 480;
+const TILING_MIN_H = 360;
 /** Taille de départ (tauri.conf.json), quand la taille gardée n'est pas fiable. */
 const NORMAL_W = 1280;
 const NORMAL_H = 900;
@@ -44,9 +49,11 @@ export async function enterMiniPlayer(): Promise<void> {
     if (!(await waitMiniReady())) throw new Error("fenêtre mini non prête");
     miniPlayerActive.set(true);
     await getCurrentWindow().hide();
+    playerService.setAnimationSuspended(true);
   } catch (e) {
     console.error("[mini-player] enter failed:", e);
     miniPlayerActive.set(false);
+    playerService.setAnimationSuspended(false);
     stopMiniBridge();
     await invoke("close_mini_window").catch(() => {});
   } finally {
@@ -59,6 +66,7 @@ export async function exitMiniPlayer(): Promise<void> {
   bascule = true;
   try {
     miniPlayerActive.set(false);
+    playerService.setAnimationSuspended(false);
     stopMiniBridge();
     await invoke("close_mini_window");
     await showMainWindow();
@@ -73,6 +81,7 @@ export async function exitMiniPlayer(): Promise<void> {
 async function restoreMainWindow(): Promise<void> {
   if (!get(miniPlayerActive)) return;
   miniPlayerActive.set(false);
+  playerService.setAnimationSuspended(false);
   stopMiniBridge();
   await showMainWindow();
 }
@@ -115,11 +124,16 @@ export async function toggleMiniPlayer(): Promise<void> {
 export async function ensureNormalSize(): Promise<void> {
   try {
     const win = getCurrentWindow();
-    await win.setMinSize(new LogicalSize(NORMAL_MIN_W, NORMAL_MIN_H));
+    const surLinux = detectOS() === "linux";
+    const minW = surLinux ? TILING_MIN_W : NORMAL_MIN_W;
+    const minH = surLinux ? TILING_MIN_H : NORMAL_MIN_H;
+    await win.setMinSize(new LogicalSize(minW, minH));
     const taille = (await win.innerSize()).toLogical(await win.scaleFactor());
-    if (taille.width < NORMAL_MIN_W || taille.height < NORMAL_MIN_H) {
+    if (taille.width < minW || taille.height < minH) {
       await win.setSize(new LogicalSize(NORMAL_W, NORMAL_H));
-      await win.center();
+      if (!surLinux) {
+        await win.center();
+      }
     }
   } catch (e) {
     console.error("[mini-player] normal size check failed:", e);
