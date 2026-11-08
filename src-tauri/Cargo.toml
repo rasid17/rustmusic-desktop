@@ -58,6 +58,7 @@ arrayvec = "0.7.8"
 num-traits = "0.2.19"
 anyhow = "1.0.104"
 md5 = "0.8.1"
+walkdir = "2"
 # NB: rester aligné sur la version qu'utilise rubato (rubato 5 attend les traits 5.x)
 audioadapter-buffers = "5.2.0"
 sqlx = { version = "0.9.0", features = [

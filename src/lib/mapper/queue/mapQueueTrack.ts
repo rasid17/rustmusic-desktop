@@ -1,6 +1,7 @@
 import { get } from "svelte/store";
 import { profilSelector } from "#lib/stores/profil/profil.store";
 import type { QueueTrack } from "#lib/types/db/queue/QueueTrack";
+import { spreadByArtist } from "#lib/helper/tools/fairShuffle";
 
 /**
  * Ce qu'une liste sait déjà d'un morceau — assez pour le mettre en file sans
@@ -15,6 +16,8 @@ export type SourceDeFile = {
   artist?: string | null;
   /** Nom employé par les playlists. */
   artist_name?: string | null;
+  album?: string | null;
+  genre?: string | null;
   duration?: number | null;
   cover?: string | null;
   thumbnail_path?: string | null;
@@ -28,6 +31,8 @@ export function toQueueTrack(source: SourceDeFile, position = 0): QueueTrack {
     path: source.path as string,
     title: source.title ?? source.name ?? source.filename ?? "Inconnu",
     artist: source.artist ?? source.artist_name ?? undefined,
+    album: source.album ?? undefined,
+    genre: source.genre ?? undefined,
     duration: source.duration ?? undefined,
     cover: source.cover ?? source.thumbnail_path ?? undefined,
     position,
@@ -43,13 +48,13 @@ export function toQueue(sources: SourceDeFile[]): QueueTrack[] {
  * L'ordre dans lequel la file va se lire à partir du morceau cliqué.
  *
  * `next()` avance de +1 sur une liste déjà mélangée : en aléatoire, le morceau
- * cliqué ouvre donc le bal et le reste est tiré au sort derrière lui.
+ * cliqué ouvre donc le bal et le reste est tiré au sort puis réparti derrière lui.
  */
 export function orderForPlayback(
   tracks: QueueTrack[],
   path: string,
   melanger: boolean,
-  tirage: (n: number) => number = (n) => Math.floor(Math.random() * n),
+  tirage?: (n: number) => number,
 ): { liste: QueueTrack[]; index: number } {
 
   const renumber = (l: QueueTrack[]) => l.map((t, i) => ({ ...t, position: i }));
@@ -63,11 +68,16 @@ export function orderForPlayback(
   const choisi = tracks.find((t) => t.path === path);
   const autres = tracks.filter((t) => t !== choisi);
 
+  const rand = tirage ?? ((n: number) => Math.floor(Math.random() * n));
   // Fisher-Yates, avec un tirage injectable pour que le test soit reproductible.
   for (let i = autres.length - 1; i > 0; i--) {
-    const j = tirage(i + 1);
+    const j = rand(i + 1);
     [autres[i], autres[j]] = [autres[j], autres[i]];
   }
 
-  return { liste: renumber(choisi ? [choisi, ...autres] : autres), index: 0 };
+  // En usage normal (sans tirage de test injecté), applique la répartition intelligente
+  // (espacement d'artiste/album + affinité de genre par rapport au titre choisi).
+  const repartis = tirage ? autres : spreadByArtist(autres, 4, choisi);
+
+  return { liste: renumber(choisi ? [choisi, ...repartis] : repartis), index: 0 };
 }

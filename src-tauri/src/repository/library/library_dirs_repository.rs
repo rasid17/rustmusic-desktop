@@ -235,6 +235,101 @@ impl LibraryDirRepository {
     }
 
     // =========================================
+    // ACTIVER / DÉSACTIVER UN DOSSIER
+    // =========================================
+    pub async fn set_active<'e, E>(
+        exec: E,
+        id: &str,
+        is_active: bool,
+    ) -> Result<(), sqlx::Error>
+    where
+        E: sqlx::Executor<'e, Database = sqlx::Sqlite>,
+    {
+        sqlx::query(
+            "UPDATE library_dirs SET is_active = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?"
+        )
+        .bind(if is_active { 1 } else { 0 })
+        .bind(id)
+        .execute(exec)
+        .await?;
+        Ok(())
+    }
+
+    // =========================================
+    // ACTIVER / DÉSACTIVER LA SURVEILLANCE AUTO
+    // =========================================
+    pub async fn set_watch_enabled<'e, E>(
+        exec: E,
+        id: &str,
+        watch_enabled: bool,
+    ) -> Result<(), sqlx::Error>
+    where
+        E: sqlx::Executor<'e, Database = sqlx::Sqlite>,
+    {
+        sqlx::query(
+            "UPDATE library_dirs SET watch_enabled = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?"
+        )
+        .bind(if watch_enabled { 1 } else { 0 })
+        .bind(id)
+        .execute(exec)
+        .await?;
+        Ok(())
+    }
+
+    // =========================================
+    // BATCH ACTIVER DOSSIERS PAR PROFIL
+    // =========================================
+    pub async fn set_active_batch(
+        pool: &sqlx::SqlitePool,
+        library_id: i64,
+        active_ids: &[String],
+    ) -> Result<(), sqlx::Error> {
+        let mut tx = pool.begin().await?;
+
+        sqlx::query(
+            "UPDATE library_dirs SET is_active = 0, updated_at = CURRENT_TIMESTAMP WHERE library_id = ?"
+        )
+        .bind(library_id)
+        .execute(&mut *tx)
+        .await?;
+
+        for id in active_ids {
+            sqlx::query(
+                "UPDATE library_dirs SET is_active = 1, updated_at = CURRENT_TIMESTAMP WHERE library_id = ? AND id = ?"
+            )
+            .bind(library_id)
+            .bind(id)
+            .execute(&mut *tx)
+            .await?;
+        }
+
+        tx.commit().await?;
+        Ok(())
+    }
+
+    // =========================================
+    // DOSSIERS ACTIFS SOUS SURVEILLANCE
+    // =========================================
+    pub async fn find_watched_active_dirs<'e, E>(exec: E) -> Result<Vec<LibraryDir>, sqlx::Error>
+    where
+        E: sqlx::Executor<'e, Database = sqlx::Sqlite>,
+    {
+        sqlx::query_as::<_, LibraryDir>(
+            r#"
+            SELECT
+                d.*,
+                COALESCE((SELECT COUNT(*) FROM library_files f WHERE f.library_dir_id = d.id), 0) AS total_files,
+                COALESCE((SELECT SUM(f.size) FROM library_files f WHERE f.library_dir_id = d.id), 0) AS total_size
+            FROM library_dirs d
+            WHERE d.is_active = 1 AND d.watch_enabled = 1
+            ORDER BY d.created_at DESC
+            "#
+        )
+        .fetch_all(exec)
+        .await
+    }
+
+    // =========================================
     // DELETE
     // =========================================
     pub async fn delete_library_dir<'e, E>(

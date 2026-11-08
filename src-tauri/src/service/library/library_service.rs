@@ -100,7 +100,12 @@ fn analyse_or_reuse(
     covers: &FolderCovers,
 ) -> Etape {
     if let Some((id, Some(en_base))) = file.to_str().and_then(|p| indexes.get(p)) {
-        let sur_disque = std::fs::metadata(file).ok().as_ref().and_then(modified_secs);
+        let meta_target = if let Some(cue_info) = file.to_str().and_then(crate::core::cue::parse_cue_uri) {
+            cue_info.real_path
+        } else {
+            file.clone()
+        };
+        let sur_disque = std::fs::metadata(&meta_target).ok().as_ref().and_then(modified_secs);
         if sur_disque.as_ref() == Some(en_base) {
             return Etape::Inchange(id.clone());
         }
@@ -124,20 +129,47 @@ fn analyse_file_sync(file: &PathBuf, covers_dir: &PathBuf, covers: &FolderCovers
 
 fn analyse_file_inner(file: &PathBuf, covers_dir: &PathBuf, covers: &FolderCovers) -> Result<FileAnalysisResult, String> {
     let path = file.to_str().ok_or("Invalid UTF-8 path")?.to_string();
-    let filename = file.file_name().and_then(|n| n.to_str()).unwrap_or_default().to_string();
-    let extension = file.extension().and_then(|e| e.to_str()).map(|e| e.to_lowercase()).unwrap_or_default();
+    let cue_info = crate::core::cue::parse_cue_uri(&path);
 
-    let metadata = std::fs::metadata(&path).map_err(|e| format!("metadata: {}", e))?;
+    let (meta_target, filename, extension) = if let Some(ref info) = cue_info {
+        let ext = info
+            .real_path
+            .extension()
+            .and_then(|e| e.to_str())
+            .map(|e| e.to_lowercase())
+            .unwrap_or_default();
+        let fname = format!(
+            "{:02} - {}",
+            info.track_no,
+            info.real_path
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or_default()
+        );
+        (info.real_path.clone(), fname, ext)
+    } else {
+        let fname = file.file_name().and_then(|n| n.to_str()).unwrap_or_default().to_string();
+        let ext = file.extension().and_then(|e| e.to_str()).map(|e| e.to_lowercase()).unwrap_or_default();
+        (file.clone(), fname, ext)
+    };
+
+    let metadata = std::fs::metadata(&meta_target).map_err(|e| format!("metadata: {}", e))?;
     let size = metadata.len() as i64;
     let file_modified = modified_secs(&metadata);
 
     let audio_file = AudioAnalyser::analyse_for_import(file).map_err(|e| e.to_string())?;
 
     // Pochette intégrée d'abord ; à défaut, celle du dossier, partagée par ses morceaux.
+    let parent_dir = if let Some(ref info) = cue_info {
+        info.real_path.parent()
+    } else {
+        file.parent()
+    };
+
     let thumbnail_url = match audio_file.tags.attached_images.first() {
         Some(img) if img.image_data.is_empty() => None,
         Some(img) => thumbnail_saver(covers_dir, &img.image_data, false).ok(),
-        None => file.parent().and_then(|dossier| covers.thumbnail(dossier, covers_dir)),
+        None => parent_dir.and_then(|dossier| covers.thumbnail(dossier, covers_dir)),
     };
 
     Ok(FileAnalysisResult { path, filename, extension, size, file_modified, audio_file, thumbnail_url })

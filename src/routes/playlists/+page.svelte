@@ -28,6 +28,7 @@ import type { TrackListView } from "#lib/types/ui/library/track/TrackListView";
 import type { RecentFileListView } from "#lib/types/ui/recent/RecentFileListView";
 import PlaylistContextMenu from "#lib/components/ui/contextmenu/PlaylistContextMenu.svelte";
 import AddPlaylistPopin from "#lib/components/playlist/popin/AddPlaylistPopin.svelte";
+import AiPlaylistPopin from "#lib/components/playlist/popin/AiPlaylistPopin.svelte";
 import SmartPlaylistPopin from "#lib/components/playlist/smart/SmartPlaylistPopin.svelte";
 import type { Playlist } from "#lib/types/db/playlist/Playlist";
 
@@ -89,6 +90,9 @@ function createPlaylist() {
 function createSmartPlaylist() {
   popinStore.open($t("playlist.new_smart"), SmartPlaylistPopin, {}, { size: "xl", icon: "lucide:sparkles", flush: true });
 }
+function createAiPlaylist() {
+  popinStore.open("AI Playlist Generator", AiPlaylistPopin, {}, { size: "lg", icon: "material-symbols:auto-awesome-rounded" });
+}
 
 // ─── Sélection : une playlist cochée apporte tous ses titres ───
 const LIKED_KEY = "liked";
@@ -119,6 +123,11 @@ const selectRecent = () =>
       </div>
     </div>
     <div class="flex flex-wrap items-center gap-2.5">
+      <button type="button" onclick={createAiPlaylist}
+              class="h-10 px-4 inline-flex items-center gap-2 rounded-xl border cursor-pointer text-sm font-semibold transition-colors
+                     border-purple-500/40 bg-purple-500/8 text-purple-700 dark:text-purple-300 hover:bg-purple-500/15">
+        <Icon icon="material-symbols:smart-toy-outline-rounded" width="18" />AI Playlist
+      </button>
       <button type="button" onclick={createSmartPlaylist}
               class="h-10 px-4 inline-flex items-center gap-2 rounded-xl border cursor-pointer text-sm font-semibold transition-colors
                      border-(--rg-bd2) text-(--rg-tx) hover:border-(--rg-gbd) hover:text-(--rg-gtx)">

@@ -15,6 +15,8 @@ import LibraryImportingLoader from "#lib/components/library/common/loader/Librar
 import { importAffiche } from "#lib/stores/library/importProgress.store";
 import ToolbarButton from "#lib/components/ui/button/ToolbarButton.svelte";
 import MixCard from "#lib/components/mix/MixCard.svelte";
+import { popinStore } from "#lib/stores/ui/popin.store";
+import AiPlaylistPopin from "#lib/components/playlist/popin/AiPlaylistPopin.svelte";
 import type { GenreMix } from "#lib/types/ui/library/genre/GenreMix";
 import type { LibraryStats } from "#lib/types/ui/library/stats/LibraryStats";
 
@@ -89,6 +91,11 @@ const grille = "grid grid-cols-[repeat(auto-fill,minmax(190px,1fr))] gap-x-5 gap
     <!-- ─── Outils ─── -->
     <div class="shrink-0 flex flex-wrap items-center gap-2.5 pl-4 md:pl-8 pr-4 md:pr-14 py-3">
       <span class="flex-1 text-[13px] text-(--rg-mu)">{$t("mix_view.for_you_desc")}</span>
+      <ToolbarButton
+        icon="material-symbols:smart-toy-outline-rounded"
+        label="AI Playlist"
+        onclick={() => popinStore.open("AI Playlist Generator", AiPlaylistPopin, { libraryId }, { size: "lg", icon: "material-symbols:auto-awesome-rounded" })}
+      />
       <ToolbarButton icon="material-symbols:refresh-rounded" label={$t("mix_view.redraw_all")} onclick={() => renew(libraryId)} />
     </div>
 

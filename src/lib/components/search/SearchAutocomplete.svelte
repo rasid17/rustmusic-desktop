@@ -17,6 +17,7 @@
   import VersionMarks from "#lib/components/ui/status/VersionMarks.svelte";
   import { activeServers, currentSource } from "#lib/stores/source/source.store";
   import { settingsStore } from "#lib/stores/settings/settings.store";
+  import { commandPaletteStore } from "#lib/stores/ui/commandPalette.store";
 
   let { query = $bindable('') }: { query?: string } = $props();
 
@@ -183,9 +184,16 @@
     />
     <!-- Le raccourci existe (layout) : on le montre tant que le champ est vide. -->
     {#if !query}
-      <kbd class="hidden lg:inline-flex group-focus-within:hidden shrink-0 items-center h-5.5 px-1.5 rounded-md border pointer-events-none
-                  font-mono text-[10.5px] leading-none text-[#5e625d] dark:text-[#8b948f]
-                  border-(--c-bord) dark:border-[#2e3632] bg-(--c-kbd) dark:bg-[#0b0d0c]">{raccourci}</kbd>
+      <button
+        type="button"
+        onclick={() => commandPaletteStore.open(query)}
+        class="hidden lg:inline-flex group-focus-within:hidden shrink-0 items-center h-5.5 px-1.5 rounded-md border cursor-pointer hover:border-emerald-500/50
+               font-mono text-[10.5px] leading-none text-[#5e625d] dark:text-[#8b948f]
+               border-(--c-bord) dark:border-[#2e3632] bg-(--c-kbd) dark:bg-[#0b0d0c] transition-colors"
+        title="Command Palette ({raccourci})"
+      >
+        <kbd class="pointer-events-none">{raccourci}</kbd>
+      </button>
     {/if}
   </div>
 

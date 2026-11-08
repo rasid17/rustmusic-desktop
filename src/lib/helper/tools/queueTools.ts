@@ -16,6 +16,8 @@ export type TrackLike = {
   title?: string | null;
   artist?: string | null;
   artist_name?: string | null;
+  album?: string | null;
+  genre?: string | null;
   duration?: number | null;
   thumbnail_path?: string | null;
   cover?: string | null;
@@ -40,6 +42,8 @@ export function toQueueTrack(track: TrackLike): QueueTrack {
     path: track.path ?? "",
     title: track.title ?? get(t)("common.unknown_title"),
     artist: track.artist ?? track.artist_name ?? get(t)("common.unknown_artist"),
+    album: track.album ?? undefined,
+    genre: track.genre ?? undefined,
     duration: track.duration ?? 0,
     cover,
     position: 0,

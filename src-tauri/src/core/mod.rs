@@ -197,3 +197,4 @@ pub mod subsonic {
     pub mod stream;
 }
 pub mod smart_playlist;
+pub mod cue;

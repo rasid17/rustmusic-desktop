@@ -76,7 +76,7 @@ const CHAMPS: &[(&str, &str, &str, FieldKind)] = &[
 /// définis. Y ajouter un champ n'oblige à toucher à rien d'autre.
 pub const TRACK_FROM: &str = "\
     FROM library_tracks lt
-    INNER JOIN library_files lf ON lf.id = lt.file_id
+    INNER JOIN library_files lf ON lf.id = lt.file_id AND NOT EXISTS (SELECT 1 FROM library_dirs ld WHERE ld.id = lf.library_dir_id AND ld.is_active = 0)
     LEFT JOIN library_cache lc ON lc.id = lt.cache_id
     LEFT JOIN library_albums la ON la.id = lt.library_album_id
     LEFT JOIN artists a ON a.id = lt.artist_id";

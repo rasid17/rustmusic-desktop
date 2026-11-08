@@ -38,6 +38,8 @@ pub struct AudioPlayer {
     is_stream_alive: Arc<AtomicBool>,
     pub(crate) current_position: Arc<AtomicU64>, // position en secondes (f64.to_bits())
     total_duration: Arc<AtomicU64>,              // durée totale en secondes (f64.to_bits())
+    cue_start_secs: Arc<AtomicU64>,
+    cue_end_secs: Arc<AtomicU64>,
     volume: Arc<AtomicU8>, // 0..100
     selected_device: Arc<Mutex<Option<String>>>,
     seek_position: Arc<AtomicU64>,
@@ -52,6 +54,8 @@ impl AudioPlayer {
             is_stream_alive: Arc::new(AtomicBool::new(false)),
             current_position: Arc::new(AtomicU64::new(0.0_f64.to_bits())),
             total_duration: Arc::new(AtomicU64::new(0.0_f64.to_bits())),
+            cue_start_secs: Arc::new(AtomicU64::new(0.0_f64.to_bits())),
+            cue_end_secs: Arc::new(AtomicU64::new(0.0_f64.to_bits())),
             volume: Arc::new(AtomicU8::new(80)),
             selected_device: Arc::new(Mutex::new(None)),
             seek_position: Arc::new(AtomicU64::new(u64::MAX)),
@@ -72,7 +76,9 @@ impl AudioPlayer {
         // N'écrit que seek_position (signal pour le decoder thread).
         // Ne PAS écrire current_position ici — la Phase 6 le dérivera
         // de current_position_frames une fois le decoder thread mis à jour.
-        self.seek_position.store(position_seconds.to_bits(), Ordering::Relaxed);
+        let cue_start = f64::from_bits(self.cue_start_secs.load(Ordering::Relaxed));
+        let target = position_seconds + cue_start;
+        self.seek_position.store(target.to_bits(), Ordering::Relaxed);
     }
 
     pub fn pause(&self) {
@@ -120,11 +126,10 @@ impl AudioPlayer {
     }
 
     pub fn get_current_position(&self) -> f64 {
-
-        let bits_lus: u64 =  self.current_position.load(Ordering::Relaxed);
+        let bits_lus: u64 = self.current_position.load(Ordering::Relaxed);
         let position_actuelle: f64 = f64::from_bits(bits_lus);
-
-        position_actuelle
+        let cue_start = f64::from_bits(self.cue_start_secs.load(Ordering::Relaxed));
+        (position_actuelle - cue_start).max(0.0)
     }
 
     pub fn get_total_duration(&self) -> f64 {
@@ -155,6 +160,15 @@ impl AudioPlayer {
 
         log::debug!("🎵 Fichier sélectionné : {:?}", file_path);
 
+        let cue_slice = crate::core::cue::parse_cue_uri(&file_path.to_string_lossy());
+        if let Some(ref slice) = cue_slice {
+            self.cue_start_secs.store(slice.start_secs.to_bits(), Ordering::Relaxed);
+            self.cue_end_secs.store(slice.end_secs.unwrap_or(0.0).to_bits(), Ordering::Relaxed);
+        } else {
+            self.cue_start_secs.store(0.0_f64.to_bits(), Ordering::Relaxed);
+            self.cue_end_secs.store(0.0_f64.to_bits(), Ordering::Relaxed);
+        }
+
         self.is_stopped.store(false, Ordering::SeqCst);
         self.is_stream_alive.store(true, Ordering::SeqCst);
 
@@ -167,6 +181,8 @@ impl AudioPlayer {
         let total_duration_clone: Arc<AtomicU64> = self.total_duration.clone();
         let volume_clone: Arc<AtomicU8> = self.volume.clone();
         let seek_position_clone: Arc<AtomicU64> = self.seek_position.clone();
+        let cue_start_secs_clone: Arc<AtomicU64> = self.cue_start_secs.clone();
+        let cue_end_secs_clone: Arc<AtomicU64> = self.cue_end_secs.clone();
         let selected_device_name = self.get_selected_device_name();
 
         // Reset seek position pour le nouveau fichier
@@ -191,6 +207,8 @@ impl AudioPlayer {
                 volume_clone,
                 selected_device_name,
                 seek_position_clone,
+                cue_start_secs_clone,
+                cue_end_secs_clone,
             ) {
                 log::error!("❌ Erreur lecture fichier: {}", e);
 
@@ -230,12 +248,30 @@ impl AudioPlayer {
         volume: Arc<AtomicU8>,
         selected_device_name: Option<String>,
         seek_position: Arc<AtomicU64>,
+        cue_start_secs: Arc<AtomicU64>,
+        cue_end_secs: Arc<AtomicU64>,
     ) -> Result<(), Box<dyn std::error::Error>> {
+        let cue_slice = crate::core::cue::parse_cue_uri(&file_path.to_string_lossy());
+        if let Some(ref slice) = cue_slice {
+            cue_start_secs.store(slice.start_secs.to_bits(), Ordering::Relaxed);
+            cue_end_secs.store(slice.end_secs.unwrap_or(0.0).to_bits(), Ordering::Relaxed);
+        } else {
+            cue_start_secs.store(0.0_f64.to_bits(), Ordering::Relaxed);
+            cue_end_secs.store(0.0_f64.to_bits(), Ordering::Relaxed);
+        }
+
+        let original_file_path = file_path.clone();
+        let actual_file_path = if let Some(ref slice) = cue_slice {
+            slice.real_path.clone()
+        } else {
+            file_path.clone()
+        };
+
         // Court-circuit DSF/DFF : Symphonia ne sait pas lire DSD,
         // on dispatche vers notre pipeline maison (audio_decoder::dsd).
         // Morceau distant : l'extension de son fichier du cache (le chemin `remote://` n'en a pas).
-        let ext_lower = crate::core::subsonic::stream::cached(&file_path)
-            .unwrap_or_else(|| file_path.clone())
+        let ext_lower = crate::core::subsonic::stream::cached(&actual_file_path)
+            .unwrap_or_else(|| actual_file_path.clone())
             .extension()
             .and_then(|s| s.to_str())
             .map(|e| e.to_ascii_lowercase());
@@ -250,7 +286,7 @@ impl AudioPlayer {
                 }
                 return Self::play_dsd_file_thread(
                     app_handle,
-                    file_path,
+                    actual_file_path,
                     is_paused,
                     is_playing,
                     is_stopped,
@@ -269,11 +305,11 @@ impl AudioPlayer {
         #[cfg(any(target_os = "windows", target_os = "linux", target_os = "macos"))]
         crate::core::audio_player::output::dop_engine::teardown_engine();
 
-        log::debug!("Fichier sélectionné : {:?}", file_path);
+        log::debug!("Fichier sélectionné : {:?}", actual_file_path);
 
         // ========== PHASE 1 : PROBE ET INFOS ==========
         let mut hint: Hint = Hint::new();
-        if let Some(ext) = file_path.extension().and_then(|s| s.to_str()) {
+        if let Some(ext) = actual_file_path.extension().and_then(|s| s.to_str()) {
             hint.with_extension(ext);
         }
 
@@ -305,7 +341,7 @@ impl AudioPlayer {
         let _ = app_handle.emit("playback-preparing", true);
 
         let pipeline_profile = crate::core::audio_quality::current_profile();
-        let needs_preload = crate::core::system_detect::is_network_path(&file_path)
+        let needs_preload = crate::core::system_detect::is_network_path(&actual_file_path)
             || matches!(
                 pipeline_profile,
                 crate::core::audio_quality::AudioQualityProfile::Low
@@ -313,10 +349,10 @@ impl AudioPlayer {
             );
 
         // Épisode de podcast encore en téléchargement : lu pendant qu'il arrive.
-        let growing = crate::core::podcast::download::reader(&file_path).transpose()?;
+        let growing = crate::core::podcast::download::reader(&actual_file_path).transpose()?;
         // Morceau d'un serveur : son fichier du cache, peut-être encore en route.
-        let remote_file = crate::core::subsonic::stream::cached(&file_path);
-        let remote = crate::core::subsonic::stream::open(&file_path).transpose()?;
+        let remote_file = crate::core::subsonic::stream::cached(&actual_file_path);
+        let remote = crate::core::subsonic::stream::open(&actual_file_path).transpose()?;
         let arriving = growing.is_some() || remote_file.as_ref().is_some_and(|f| crate::core::podcast::download::get(f).is_some());
 
         let mss: MediaSourceStream = if let Some(source) = growing {
@@ -329,11 +365,11 @@ impl AudioPlayer {
             }
             MediaSourceStream::new(source, Default::default())
         } else if needs_preload {
-            let bytes: Vec<u8> = std::fs::read(&file_path)?;
+            let bytes: Vec<u8> = std::fs::read(&actual_file_path)?;
             log::info!(
                 "📥 Fichier pré-chargé en RAM : {} MB ({})",
                 bytes.len() / (1024 * 1024),
-                if crate::core::system_detect::is_network_path(&file_path) {
+                if crate::core::system_detect::is_network_path(&actual_file_path) {
                     "réseau"
                 } else {
                     "profil contraint"
@@ -341,7 +377,7 @@ impl AudioPlayer {
             );
             MediaSourceStream::new(Box::new(std::io::Cursor::new(bytes)), Default::default())
         } else {
-            let source: Box<File> = Box::new(File::open(&file_path)?);
+            let source: Box<File> = Box::new(File::open(&actual_file_path)?);
             MediaSourceStream::new(source, Default::default())
         };
 
@@ -408,12 +444,17 @@ impl AudioPlayer {
         }
         // MP3 sans index en cours de téléchargement : la durée annoncée par le flux.
         if total_secs.is_none() {
-            let file = remote_file.as_deref().unwrap_or(&file_path);
+            let file = remote_file.as_deref().unwrap_or(&actual_file_path);
             total_secs = crate::core::podcast::download::get(file).and_then(|d| d.duration_hint);
         }
         if let Some(secs) = total_secs {
-            total_duration.store(secs.to_bits(), Ordering::Relaxed);
-            log::debug!("🕒 Durée totale détectée : {:.2} secondes", secs);
+            let dur = if let Some(ref slice) = cue_slice {
+                (slice.end_secs.unwrap_or(secs) - slice.start_secs).max(0.0)
+            } else {
+                secs
+            };
+            total_duration.store(dur.to_bits(), Ordering::Relaxed);
+            log::debug!("🕒 Durée totale détectée : {:.2} secondes", dur);
         } else {
             log::debug!("⚠️ Impossible de déterminer la durée totale");
         }
@@ -631,6 +672,8 @@ impl AudioPlayer {
         let seek_flush: Arc<AtomicBool> = Arc::new(AtomicBool::new(false));
         let seek_flush_decoder: Arc<AtomicBool> = seek_flush.clone();
         let total_duration_for_decoder: Arc<AtomicU64> = total_duration.clone();
+        let cue_start_secs_decoder: Arc<AtomicU64> = cue_start_secs.clone();
+        let cue_end_secs_decoder: Arc<AtomicU64> = cue_end_secs.clone();
 
         // Extraits pour la pipeline info émise après audio_output.start() —
         // codec_params est déplacé dans le thread décodeur juste après.
@@ -638,6 +681,12 @@ impl AudioPlayer {
         // Inconnue : affichée 16, mais jamais comptée bit-perfect.
         let profondeur = crate::core::audio_player::pipeline_info::source_bit_depth(&codec_params);
         let pipeline_source_bits = profondeur.unwrap_or(16);
+
+        if let Some(ref slice) = cue_slice {
+            if slice.start_secs > 0.0 {
+                seek_position.store(slice.start_secs.to_bits(), Ordering::Relaxed);
+            }
+        }
 
         let decoder_handle: JoinHandle<Result<(), String>> = std::thread::spawn(move || {
             decode_thread(
@@ -660,6 +709,8 @@ impl AudioPlayer {
                 seek_flush_decoder,
                 total_duration_for_decoder,
                 arriving,
+                cue_start_secs_decoder,
+                cue_end_secs_decoder,
             )
         });
 
@@ -808,7 +859,7 @@ impl AudioPlayer {
         startup.mark("démarrage du flux");
         startup.finish(audio_output.backend().display_name());
         // AirPlay : titre, artiste et pochette sur l'écran de l'appareil.
-        crate::core::network_player::airplay::sender::now_playing(file_path.clone());
+        crate::core::network_player::airplay::sender::now_playing(actual_file_path.clone());
 
         log::debug!("▶️ Lecture en cours via {}", audio_output.backend().display_name());
 
@@ -881,10 +932,10 @@ impl AudioPlayer {
             output_channels,
         };
         let can_preload =
-            crate::core::audio_player::preload::gapless_enabled() && !force_full_decode;
+            crate::core::audio_player::preload::gapless_enabled() && !force_full_decode && cue_slice.is_none();
 
         // Chemin de la piste réellement en cours : change à chaque promotion.
-        let mut playing_path: PathBuf = file_path.clone();
+        let mut playing_path: PathBuf = original_file_path.clone();
         // Dernière annonce pour laquelle un décodage a été lancé, pour ne pas
         // relancer le même en boucle.
         let mut preload_attempted: Option<PathBuf> = None;
@@ -950,7 +1001,19 @@ impl AudioPlayer {
             if seek_bits != u64::MAX {
                 seek_position.store(u64::MAX, Ordering::Relaxed);
                 let total_dur = f64::from_bits(total_duration.load(Ordering::Relaxed));
-                let seek_seconds = f64::from_bits(seek_bits).max(0.0).min(total_dur.max(0.0));
+                let cue_start = f64::from_bits(cue_start_secs.load(Ordering::Relaxed));
+                let cue_end = f64::from_bits(cue_end_secs.load(Ordering::Relaxed));
+                let max_seek = if cue_end > cue_start {
+                    cue_end
+                } else {
+                    total_dur.max(0.0)
+                };
+                let min_seek = if cue_end > cue_start {
+                    cue_start
+                } else {
+                    0.0
+                };
+                let seek_seconds = f64::from_bits(seek_bits).clamp(min_seek, max_seek);
                 let new_frames = (seek_seconds * output_sample_rate as f64) as usize;
                 let new_cursor = new_frames * output_channels as usize;
 
@@ -1013,6 +1076,12 @@ impl AudioPlayer {
             let frames: usize = current_position_frames.load(Ordering::Relaxed);
             let new_pos: f64 = frames as f64 / output_sample_rate as f64;
             current_position.store(new_pos.to_bits(), Ordering::Relaxed);
+
+            let cue_start = f64::from_bits(cue_start_secs.load(Ordering::Relaxed));
+            let cue_end = f64::from_bits(cue_end_secs.load(Ordering::Relaxed));
+            if cue_end > cue_start && new_pos >= cue_end {
+                is_end = true;
+            }
 
             // ─── PROMOTION : enchaînement sans blanc ───
             // Le curseur a atteint la fin du morceau, mais son audio est encore
@@ -2342,6 +2411,8 @@ pub fn decode_thread<P>(
     total_duration: Arc<AtomicU64>,
     // Fichier encore en téléchargement : combler le début peut être lent.
     arriving: bool,
+    cue_start_secs: Arc<AtomicU64>,
+    cue_end_secs: Arc<AtomicU64>,
 ) -> Result<(), String>
 where
     P: Producer<Item = f32>
@@ -2386,7 +2457,19 @@ where
             seek_position.store(u64::MAX, Ordering::Relaxed);
 
             let total_dur = f64::from_bits(total_duration.load(Ordering::Relaxed));
-            let seek_seconds = f64::from_bits(seek_bits).max(0.0).min(total_dur.max(0.0));
+            let cue_start = f64::from_bits(cue_start_secs.load(Ordering::Relaxed));
+            let cue_end = f64::from_bits(cue_end_secs.load(Ordering::Relaxed));
+            let max_seek = if cue_end > cue_start {
+                cue_end
+            } else {
+                total_dur.max(0.0)
+            };
+            let min_seek = if cue_end > cue_start {
+                cue_start
+            } else {
+                0.0
+            };
+            let seek_seconds = f64::from_bits(seek_bits).clamp(min_seek, max_seek);
             let new_frames = (seek_seconds * output_sample_rate as f64) as usize;
 
             let target = new_frames * out_ch;
@@ -2761,6 +2844,8 @@ mod tests {
             Arc::new(AtomicBool::new(false)),
             Arc::new(AtomicU64::new((SECONDS as f64).to_bits())),
             false,
+            Arc::new(AtomicU64::new(0.0_f64.to_bits())),
+            Arc::new(AtomicU64::new(0.0_f64.to_bits())),
         )
         .unwrap();
         Arc::try_unwrap(full_buffer).unwrap().into_inner().unwrap()

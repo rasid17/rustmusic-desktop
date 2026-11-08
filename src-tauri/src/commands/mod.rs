@@ -30,3 +30,4 @@ pub mod platform_command;
 pub mod mini_window;
 pub mod podcast_command;
 pub mod server_command;
+pub mod ai_playlist_command;

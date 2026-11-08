@@ -48,6 +48,36 @@ impl AudioAnalyser {
         scan: bool,
         folder_cover: bool,
     ) -> Result<AudioFile, Box<dyn std::error::Error>> {
+        if let Some(cue_info) = file_path.to_str().and_then(crate::core::cue::parse_cue_uri) {
+            let mut audio_file = Self::analyse_inner(&cue_info.real_path, scan, folder_cover)?;
+            audio_file.path = file_path.to_string_lossy().into_owned();
+            let full_dur = audio_file.duration as f64;
+            let end = cue_info.end_secs.unwrap_or(full_dur);
+            audio_file.duration = (end - cue_info.start_secs).max(0.0) as f32;
+            audio_file.tags.track_number = Some(cue_info.track_no);
+            if let Some(meta) = crate::core::cue::resolve_cue_track_metadata(&cue_info) {
+                if let Some(t) = meta.title {
+                    audio_file.tags.title = Some(t);
+                }
+                if let Some(a) = meta.performer.or(meta.album_performer.clone()) {
+                    audio_file.tags.artist = Some(a);
+                }
+                if let Some(alb) = meta.album_title {
+                    audio_file.tags.album = Some(alb);
+                }
+                if let Some(aa) = meta.album_performer {
+                    audio_file.tags.album_artist = Some(aa);
+                }
+                if let Some(g) = meta.genre {
+                    audio_file.tags.genre = Some(g);
+                }
+                if let Some(y) = meta.year {
+                    audio_file.tags.year = Some(y.to_string());
+                }
+            }
+            return Ok(audio_file);
+        }
+
         // Court-circuit pour les formats gérés par notre extractor maison
         // (Symphonia ne sait pas lire DSD, DSF ni DFF).
         //

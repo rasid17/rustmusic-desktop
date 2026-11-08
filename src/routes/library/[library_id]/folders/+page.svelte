@@ -52,7 +52,7 @@
     void $importsTermines;
     loading = true;
     invoke<LibraryDir[]>("get_library_dirs", { libraryId: id })
-      .then((d) => { if (id === libraryId) rootDirs = d ?? []; })
+      .then((d) => { if (id === libraryId) rootDirs = (d ?? []).filter((dir) => dir.is_active); })
       .catch((e) => console.error("Failed to load dirs:", e))
       .finally(() => (loading = false));
   });

@@ -69,8 +69,14 @@ impl LibraryRepository {
                 description,
                 cover,
                 position,
-                total_tracks,
-                total_albums,
+                CASE WHEN EXISTS (SELECT 1 FROM library_dirs ld WHERE ld.library_id = library.id AND ld.is_active = 0)
+                    THEN (SELECT COUNT(*) FROM library_tracks lt INNER JOIN library_files lf ON lf.id = lt.file_id AND NOT EXISTS (SELECT 1 FROM library_dirs ld WHERE ld.id = lf.library_dir_id AND ld.is_active = 0) WHERE lt.library_id = library.id)
+                    ELSE total_tracks
+                END AS total_tracks,
+                CASE WHEN EXISTS (SELECT 1 FROM library_dirs ld WHERE ld.library_id = library.id AND ld.is_active = 0)
+                    THEN (SELECT COUNT(*) FROM library_albums la WHERE la.library_id = library.id AND (NOT EXISTS (SELECT 1 FROM library_tracks lt0 WHERE lt0.library_album_id = la.id) OR EXISTS (SELECT 1 FROM library_tracks lt JOIN library_files lf ON lf.id = lt.file_id WHERE lt.library_album_id = la.id AND NOT EXISTS (SELECT 1 FROM library_dirs ld WHERE ld.id = lf.library_dir_id AND ld.is_active = 0))))
+                    ELSE total_albums
+                END AS total_albums,
                 -- Compte vivant : `total_artists`, tenue par des declencheurs,
                 -- ne redescend jamais quand une cascade efface pistes et
                 -- albums. Par ensembles et non par artiste — la version
@@ -81,13 +87,18 @@ impl LibraryRepository {
                     INTERSECT
                     SELECT artist_id FROM (
                         SELECT lt.artist_id FROM library_tracks lt
+                        INNER JOIN library_files lf ON lf.id = lt.file_id AND NOT EXISTS (SELECT 1 FROM library_dirs ld WHERE ld.id = lf.library_dir_id AND ld.is_active = 0)
                         WHERE lt.library_id = library.id AND lt.artist_id IS NOT NULL
                         UNION
                         SELECT lta.artist_id FROM library_track_artists lta
+                        INNER JOIN library_tracks lt ON lt.id = lta.library_track_id
+                        INNER JOIN library_files lf ON lf.id = lt.file_id AND NOT EXISTS (SELECT 1 FROM library_dirs ld WHERE ld.id = lf.library_dir_id AND ld.is_active = 0)
                         WHERE lta.library_id = library.id
                         UNION
                         SELECT lb.artist_id FROM library_albums lb
                         WHERE lb.library_id = library.id AND lb.artist_id IS NOT NULL
+                          AND (NOT EXISTS (SELECT 1 FROM library_tracks lt0 WHERE lt0.library_album_id = lb.id)
+                               OR EXISTS (SELECT 1 FROM library_tracks lt JOIN library_files lf ON lf.id = lt.file_id WHERE lt.library_album_id = lb.id AND NOT EXISTS (SELECT 1 FROM library_dirs ld WHERE ld.id = lf.library_dir_id AND ld.is_active = 0)))
                     )
                 )) AS total_artists,
                 is_default,
@@ -121,8 +132,14 @@ impl LibraryRepository {
                 description,
                 cover,
                 position,
-                total_tracks,
-                total_albums,
+                CASE WHEN EXISTS (SELECT 1 FROM library_dirs ld WHERE ld.library_id = library.id AND ld.is_active = 0)
+                    THEN (SELECT COUNT(*) FROM library_tracks lt INNER JOIN library_files lf ON lf.id = lt.file_id AND NOT EXISTS (SELECT 1 FROM library_dirs ld WHERE ld.id = lf.library_dir_id AND ld.is_active = 0) WHERE lt.library_id = library.id)
+                    ELSE total_tracks
+                END AS total_tracks,
+                CASE WHEN EXISTS (SELECT 1 FROM library_dirs ld WHERE ld.library_id = library.id AND ld.is_active = 0)
+                    THEN (SELECT COUNT(*) FROM library_albums la WHERE la.library_id = library.id AND (NOT EXISTS (SELECT 1 FROM library_tracks lt0 WHERE lt0.library_album_id = la.id) OR EXISTS (SELECT 1 FROM library_tracks lt JOIN library_files lf ON lf.id = lt.file_id WHERE lt.library_album_id = la.id AND NOT EXISTS (SELECT 1 FROM library_dirs ld WHERE ld.id = lf.library_dir_id AND ld.is_active = 0))))
+                    ELSE total_albums
+                END AS total_albums,
                 -- Compte vivant : `total_artists`, tenue par des declencheurs,
                 -- ne redescend jamais quand une cascade efface pistes et
                 -- albums. Par ensembles et non par artiste — la version
@@ -133,13 +150,18 @@ impl LibraryRepository {
                     INTERSECT
                     SELECT artist_id FROM (
                         SELECT lt.artist_id FROM library_tracks lt
+                        INNER JOIN library_files lf ON lf.id = lt.file_id AND NOT EXISTS (SELECT 1 FROM library_dirs ld WHERE ld.id = lf.library_dir_id AND ld.is_active = 0)
                         WHERE lt.library_id = library.id AND lt.artist_id IS NOT NULL
                         UNION
                         SELECT lta.artist_id FROM library_track_artists lta
+                        INNER JOIN library_tracks lt ON lt.id = lta.library_track_id
+                        INNER JOIN library_files lf ON lf.id = lt.file_id AND NOT EXISTS (SELECT 1 FROM library_dirs ld WHERE ld.id = lf.library_dir_id AND ld.is_active = 0)
                         WHERE lta.library_id = library.id
                         UNION
                         SELECT lb.artist_id FROM library_albums lb
                         WHERE lb.library_id = library.id AND lb.artist_id IS NOT NULL
+                          AND (NOT EXISTS (SELECT 1 FROM library_tracks lt0 WHERE lt0.library_album_id = lb.id)
+                               OR EXISTS (SELECT 1 FROM library_tracks lt JOIN library_files lf ON lf.id = lt.file_id WHERE lt.library_album_id = lb.id AND NOT EXISTS (SELECT 1 FROM library_dirs ld WHERE ld.id = lf.library_dir_id AND ld.is_active = 0)))
                     )
                 )) AS total_artists,
                 is_default,
@@ -172,8 +194,14 @@ impl LibraryRepository {
                 description,
                 cover,
                 position,
-                total_tracks,
-                total_albums,
+                CASE WHEN EXISTS (SELECT 1 FROM library_dirs ld WHERE ld.library_id = library.id AND ld.is_active = 0)
+                    THEN (SELECT COUNT(*) FROM library_tracks lt INNER JOIN library_files lf ON lf.id = lt.file_id AND NOT EXISTS (SELECT 1 FROM library_dirs ld WHERE ld.id = lf.library_dir_id AND ld.is_active = 0) WHERE lt.library_id = library.id)
+                    ELSE total_tracks
+                END AS total_tracks,
+                CASE WHEN EXISTS (SELECT 1 FROM library_dirs ld WHERE ld.library_id = library.id AND ld.is_active = 0)
+                    THEN (SELECT COUNT(*) FROM library_albums la WHERE la.library_id = library.id AND (NOT EXISTS (SELECT 1 FROM library_tracks lt0 WHERE lt0.library_album_id = la.id) OR EXISTS (SELECT 1 FROM library_tracks lt JOIN library_files lf ON lf.id = lt.file_id WHERE lt.library_album_id = la.id AND NOT EXISTS (SELECT 1 FROM library_dirs ld WHERE ld.id = lf.library_dir_id AND ld.is_active = 0))))
+                    ELSE total_albums
+                END AS total_albums,
                 -- Compte vivant : `total_artists`, tenue par des declencheurs,
                 -- ne redescend jamais quand une cascade efface pistes et
                 -- albums. Par ensembles et non par artiste — la version
@@ -184,13 +212,18 @@ impl LibraryRepository {
                     INTERSECT
                     SELECT artist_id FROM (
                         SELECT lt.artist_id FROM library_tracks lt
+                        INNER JOIN library_files lf ON lf.id = lt.file_id AND NOT EXISTS (SELECT 1 FROM library_dirs ld WHERE ld.id = lf.library_dir_id AND ld.is_active = 0)
                         WHERE lt.library_id = library.id AND lt.artist_id IS NOT NULL
                         UNION
                         SELECT lta.artist_id FROM library_track_artists lta
+                        INNER JOIN library_tracks lt ON lt.id = lta.library_track_id
+                        INNER JOIN library_files lf ON lf.id = lt.file_id AND NOT EXISTS (SELECT 1 FROM library_dirs ld WHERE ld.id = lf.library_dir_id AND ld.is_active = 0)
                         WHERE lta.library_id = library.id
                         UNION
                         SELECT lb.artist_id FROM library_albums lb
                         WHERE lb.library_id = library.id AND lb.artist_id IS NOT NULL
+                          AND (NOT EXISTS (SELECT 1 FROM library_tracks lt0 WHERE lt0.library_album_id = lb.id)
+                               OR EXISTS (SELECT 1 FROM library_tracks lt JOIN library_files lf ON lf.id = lt.file_id WHERE lt.library_album_id = lb.id AND NOT EXISTS (SELECT 1 FROM library_dirs ld WHERE ld.id = lf.library_dir_id AND ld.is_active = 0)))
                     )
                 )) AS total_artists,
                 is_default,

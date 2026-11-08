@@ -17,6 +17,7 @@ impl LibraryGenreRepository {
                 MAX(lt.last_played_at) AS last_played_at
             FROM library_cache lc
             INNER JOIN library_tracks lt ON lt.cache_id = lc.id
+            INNER JOIN library_files lf ON lf.id = lt.file_id AND NOT EXISTS (SELECT 1 FROM library_dirs ld WHERE ld.id = lf.library_dir_id AND ld.is_active = 0)
             LEFT JOIN library_albums la ON la.id = lt.library_album_id
             WHERE lt.library_id = ?
               AND lc.genre IS NOT NULL AND lc.genre != ''
@@ -60,6 +61,7 @@ impl LibraryGenreRepository {
                 SELECT lc.genre AS genre, a.name AS name,
                        ROW_NUMBER() OVER (PARTITION BY lc.genre ORDER BY COUNT(*) DESC, a.name) AS rang
                 FROM library_tracks lt
+                JOIN library_files lf ON lf.id = lt.file_id AND NOT EXISTS (SELECT 1 FROM library_dirs ld WHERE ld.id = lf.library_dir_id AND ld.is_active = 0)
                 JOIN library_cache lc ON lc.id = lt.cache_id
                 JOIN artists a ON a.id = lt.artist_id
                 WHERE lt.library_id = ? AND lc.genre IS NOT NULL AND lc.genre != ''

@@ -12,6 +12,9 @@
   import { libraryStore } from "#lib/stores/library/library.store";
   import { forget } from "#lib/stores/mix/mix.store";
   import { resetTagCache } from "#lib/config/trackColumns";
+  import { readLocal } from "#lib/helper/tools/storage";
+  import { profilSelector } from "#lib/stores/profil/profil.store";
+  import { errorMessage } from "#lib/helper/tools/errorTools";
   import RoundButton from "#lib/components/ui/button/RoundButton.svelte";
   import PageState from "#lib/components/ui/layout/PageState.svelte";
   import PlaylistTracksView from "#lib/components/playlist/PlaylistTracksView.svelte";
@@ -120,6 +123,77 @@
     }
   }
 
+  let aiBusy = $state<"extend" | "reorder" | null>(null);
+
+  async function handleAiExtend() {
+    if (aiBusy) return;
+    const agentId = readLocal("ai_playlist:agent", "claude");
+    const customCmd = readLocal("ai_playlist:custom_cmd", "");
+    aiBusy = "extend";
+    try {
+      const res = await invoke<{ track_count: number; agent_used: string }>("extend_ai_playlist", {
+        payload: {
+          playlist_id: playlistId,
+          profil_id: $profilSelector.profilSelected?.id ?? 1,
+          library_id: shown?.library_id ?? libraryId,
+          agent_id: agentId,
+          custom_command: customCmd.trim() || null,
+          hint: null,
+          add_count: 10,
+        },
+      });
+      await playlistStore.refresh();
+      await load(playlistId, ++run);
+      toasts.push({
+        type: "success",
+        title: "AI Extend Playlist",
+        message: `+${res.track_count} lagu senada ditambahkan (${res.agent_used}).`,
+      });
+    } catch (e) {
+      console.error("[playlist] ai extend :", e);
+      toasts.push({
+        type: "error",
+        title: "AI Extend Playlist",
+        message: errorMessage(e),
+      });
+    } finally {
+      aiBusy = null;
+    }
+  }
+
+  async function handleAiReorder() {
+    if (aiBusy || tracks.length < 3) return;
+    const agentId = readLocal("ai_playlist:agent", "claude");
+    const customCmd = readLocal("ai_playlist:custom_cmd", "");
+    aiBusy = "reorder";
+    try {
+      const res = await invoke<{ track_count: number; agent_used: string }>("reorder_ai_playlist", {
+        payload: {
+          playlist_id: playlistId,
+          agent_id: agentId,
+          custom_command: customCmd.trim() || null,
+          instruction: null,
+        },
+      });
+      await playlistStore.refresh();
+      await load(playlistId, ++run);
+      toasts.push({
+        type: "success",
+        title: "AI Reorder Flow",
+        message: `Urutan ${res.track_count} lagu telah dioptimalkan (${res.agent_used}).`,
+      });
+    } catch (e) {
+      console.error("[playlist] ai reorder :", e);
+      toasts.push({
+        type: "error",
+        title: "AI Reorder Flow",
+        message: errorMessage(e),
+      });
+    } finally {
+      aiBusy = null;
+    }
+  }
+
   async function remove(track: TrackListView) {
     const itemId = itemIds.get(track.id);
     if (itemId == null) return;
@@ -194,6 +268,22 @@
         <RoundButton icon="material-symbols:shuffle-rounded"
                      title={renouvellement ? $t("auto_mix.regenerating") : $t("auto_mix.regenerate")}
                      onclick={regenerer} />
+      {/if}
+      {#if !shown.is_smart && !shown.is_auto}
+        <RoundButton
+          icon={aiBusy === "extend" ? "lucide:loader-2" : "mynaui:sparkles"}
+          title={aiBusy === "extend" ? "Menambahkan lagu senada..." : "AI Extend (+10 Lagu Senada)"}
+          disabled={aiBusy !== null}
+          onclick={handleAiExtend}
+        />
+        {#if tracks.length >= 3}
+          <RoundButton
+            icon={aiBusy === "reorder" ? "lucide:loader-2" : "material-symbols:low-priority-rounded"}
+            title={aiBusy === "reorder" ? "Mengurutkan alur..." : "AI Reorder Flow (Urutkan Transisi Halus)"}
+            disabled={aiBusy !== null}
+            onclick={handleAiReorder}
+          />
+        {/if}
       {/if}
       <!-- Une playlist auto se modifie par ses règles, pas par sa liste. -->
       <RoundButton icon={seRegle ? "lucide:sparkles" : "material-symbols:edit-outline-rounded"}

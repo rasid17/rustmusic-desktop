@@ -17,6 +17,7 @@
   import AddPlaylistPopin from "#lib/components/playlist/popin/AddPlaylistPopin.svelte";
   import { canWriteTags } from "#lib/services/tags/tagEditor.service";
   import EditTagsPopin from "#lib/components/library/common/popin/EditTagsPopin.svelte";
+  import AiPlaylistPopin from "#lib/components/playlist/popin/AiPlaylistPopin.svelte";
 
   type Props = {
     track: TrackLike & { id?: string | number | null; artist_id?: string | null; library_artist_id?: string | null; album_id?: string | null };
@@ -121,6 +122,26 @@
     popinStore.open($t('playlist.new'), AddPlaylistPopin, {
       apresCreation: (pl: Playlist) => handleAddToPlaylist(pl),
     });
+  }
+
+  function handleAiSimilarPlaylist() {
+    const artist = track.artist ?? track.artist_name;
+    const parts = [
+      track.title ? `"${track.title}"` : "",
+      artist ? `oleh ${artist}` : "",
+      track.album ? `(album ${track.album})` : "",
+      track.genre ? `genre ${track.genre}` : "",
+    ].filter(Boolean).join(" ");
+    const seedPrompt = `Lagu-lagu yang memiliki nuansa, genre, atau energi senada dengan ${parts || "lagu ini"}, dengan transisi yang halus.`;
+    const seedName = track.title ? `Mix · ${track.title.slice(0, 28)}` : "";
+
+    onclose();
+    popinStore.open(
+      "AI Playlist Generator",
+      AiPlaylistPopin,
+      { libraryId, initialPrompt: seedPrompt, initialName: seedName },
+      { size: "lg", icon: "mynaui:sparkles" },
+    );
   }
 
   async function toggleOffline(kept: boolean) {
@@ -315,6 +336,15 @@
       {/if}
     </div>
   {/if}
+
+  <button
+    class="w-full flex items-center gap-2.5 px-3.5 py-2 text-sm text-left cursor-pointer
+           text-(--rg-tx) hover:bg-violet-500/15 hover:text-violet-600 dark:hover:text-violet-300 transition-colors"
+    onclick={handleAiSimilarPlaylist}
+  >
+    <Icon icon="mynaui:sparkles" width="14" class="text-violet-500" />
+    AI Playlist Senada
+  </button>
   {/if}
 
   <!-- Navigation (optionnel) -->

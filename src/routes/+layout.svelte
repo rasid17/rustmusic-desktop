@@ -21,10 +21,14 @@ import ProfilSelectorInput from "#lib/components/header/ProfilSelectorInput.svel
 import ProfilSelectorPopin from "#lib/components/header/ProfilSelectorPopin.svelte";
 import Titlebar from "#lib/components/ui/titlebar/Titlebar.svelte";
 import Popin from "#lib/components/ui/popin/Popin.svelte";
+import CommandPalette from "#lib/components/search/CommandPalette.svelte";
+import { commandPaletteStore } from "#lib/stores/ui/commandPalette.store";
 import { libraryStore } from "#lib/stores/library/library.store";
+import { libraryContentStore } from "#lib/stores/library/libraryContent.store";
+import { forgetLocations } from "#lib/helper/library/trackLocation";
 import { queueState } from "#lib/stores/queue/queueState.store";
 import { playerService } from "#lib/services/player/player.service";
-import { importProgressStore } from "#lib/stores/library/importProgress.store";
+import { importProgressStore, importsTermines } from "#lib/stores/library/importProgress.store";
 import { settingsStore } from "#lib/stores/settings/settings.store";
 import { sidebarStore } from "#lib/stores/ui/sidebar.store";
 import LibraryTabs from "#lib/components/library/common/LibraryTabs.svelte";
@@ -122,6 +126,19 @@ onMount(() => {
   if (miniFenetre) return;
   const fin = listen<boolean>("systeme-veille", (e) => {
     if (e.payload && get(player).status === "playing") playerService.pauseFile();
+  });
+  return () => { fin.then((f) => f()); };
+});
+
+// Auto-watch : dossier synchronisé en arrière-plan par le watcher
+onMount(() => {
+  if (miniFenetre) return;
+  const fin = listen<{ libraryId: number; dirId: string; path: string; library_id?: number }>("library-auto-synced", (event) => {
+    forgetLocations();
+    const libId = event.payload.libraryId ?? event.payload.library_id;
+    libraryContentStore.refresh(libId);
+    libraryStore.refresh();
+    importsTermines.update((n) => n + 1);
   });
   return () => { fin.then((f) => f()); };
 });
@@ -243,20 +260,29 @@ const shortcutHandlers: Record<ShortcutAction, () => void> = {
   volumeUp: () => applyVolume(get(volume) + 5),
   volumeDown: () => applyVolume(get(volume) - 5),
   mute: () => { invoke('mute').then(loadVolume); },
-  search: () => (document.querySelector('input[type="search"]') as HTMLInputElement | null)?.focus(),
+  search: () => commandPaletteStore.toggle(),
   toggleMini: () => { void toggleMiniPlayer(); },
 };
 
 function handleKeydown(e: KeyboardEvent) {
   // La fenêtre mini a ses propres raccourcis (MiniRoot), bornés à la lecture.
   if (miniFenetre) return;
+
+  const binding = eventToBinding(e);
+  const action = binding ? findAction(shortcuts, binding) : undefined;
+
+  // Mod+K / Ctrl+K search shortcut works EVEN when inside an INPUT, TEXTAREA, etc.
+  if (action === 'search') {
+    e.preventDefault();
+    shortcutHandlers.search();
+    return;
+  }
+
   // Ignorer si on est dans un champ, ou sur une glissière qui gère ses flèches
   const target = e.target as HTMLElement;
   const tag = target?.tagName;
   if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || target?.getAttribute?.('role') === 'slider') return;
 
-  const binding = eventToBinding(e);
-  const action = binding ? findAction(shortcuts, binding) : undefined;
   if (!action) return;
   e.preventDefault();
   shortcutHandlers[action]();
@@ -379,6 +405,7 @@ function handleKeydown(e: KeyboardEvent) {
   <UpdateBanner />
   <SupportPrompt />
   <Popin />
+  <CommandPalette />
   <!-- Panneau flottant : un lot peut durer des minutes, l'application doit
        rester utilisable pendant ce temps. -->
   <BatchPanel />

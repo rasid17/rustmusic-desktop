@@ -255,9 +255,11 @@ impl LibraryAlbumRepository {
             FROM library_albums la
             LEFT JOIN artists a ON a.id = la.artist_id
             LEFT JOIN library_tracks lt ON lt.library_album_id = la.id
+                AND NOT EXISTS (SELECT 1 FROM library_files lf JOIN library_dirs ld ON ld.id = lf.library_dir_id WHERE lf.id = lt.file_id AND ld.is_active = 0)
             LEFT JOIN library_cache lc ON lc.id = lt.cache_id
             WHERE la.library_id = ? {}
             GROUP BY la.id
+            HAVING COUNT(lt.id) > 0 OR NOT EXISTS (SELECT 1 FROM library_tracks lt0 WHERE lt0.library_album_id = la.id)
             ORDER BY la.title_normalized ASC
             "#, where_query);
 
@@ -293,10 +295,12 @@ impl LibraryAlbumRepository {
                     WHERE library_id = ?1 AND artist_id = ?2
                 UNION
                 SELECT t.library_album_id FROM library_tracks t
+                    JOIN library_files lf ON lf.id = t.file_id AND NOT EXISTS (SELECT 1 FROM library_dirs ld WHERE ld.id = lf.library_dir_id AND ld.is_active = 0)
                     WHERE t.artist_id = ?2 AND t.library_album_id IS NOT NULL AND ?3
                 UNION
                 SELECT t.library_album_id FROM library_track_artists ta
                     JOIN library_tracks t ON t.id = ta.library_track_id
+                    JOIN library_files lf ON lf.id = t.file_id AND NOT EXISTS (SELECT 1 FROM library_dirs ld WHERE ld.id = lf.library_dir_id AND ld.is_active = 0)
                     WHERE ta.artist_id = ?2 AND t.library_album_id IS NOT NULL AND ?3
             )
             SELECT
@@ -321,8 +325,10 @@ impl LibraryAlbumRepository {
             JOIN ses_albums s ON s.id = la.id
             LEFT JOIN artists a ON a.id = la.artist_id
             LEFT JOIN library_tracks lt ON lt.library_album_id = la.id
+                AND NOT EXISTS (SELECT 1 FROM library_files lf JOIN library_dirs ld ON ld.id = lf.library_dir_id WHERE lf.id = lt.file_id AND ld.is_active = 0)
             WHERE la.library_id = ?1
             GROUP BY la.id
+            HAVING COUNT(lt.id) > 0 OR NOT EXISTS (SELECT 1 FROM library_tracks lt0 WHERE lt0.library_album_id = la.id)
             ORDER BY participation ASC, la.year DESC, la.title_normalized ASC
             "#
         )
@@ -645,5 +651,49 @@ mod tests {
             .await.expect("second artiste");
 
         assert_eq!(un.id, deux.id, "un dossier, un album — c'est tout l'objet de la 0.2.5");
+    }
+
+    #[tokio::test]
+    async fn an_inactive_directory_hides_its_tracks_albums_and_artists_until_reactivated() {
+        use crate::repository::library::library_dirs_repository::LibraryDirRepository;
+        use crate::repository::library::library_track_repository::LibraryTrackRepository;
+        use crate::repository::library::library_artist_repository::LibraryArtistRepository;
+
+        let pool = base().await;
+        insert_artist(&pool, "pop", "Pop Star").await;
+        insert_artist(&pool, "orch", "Vienna Philharmonic").await;
+        sqlx::query("INSERT INTO library_artists (id, library_id, artist_id) VALUES ('la-pop', 1, 'pop'), ('la-orch', 1, 'orch')")
+            .execute(&pool).await.unwrap();
+
+        insert_album(&pool, "alb-pop", "Pop Hits", "pop").await;
+        insert_album(&pool, "alb-orch", "Symphony No. 9", "orch").await;
+
+        sqlx::query("INSERT INTO library_dirs (id, library_id, path, name, is_active) VALUES ('d-pop', 1, '/music/pop', 'Pop', 1), ('d-orch', 1, '/music/orch', 'Orchestra', 1)")
+            .execute(&pool).await.unwrap();
+
+        sqlx::query("INSERT INTO library_files (id, library_id, library_dir_id, path, filename, extension, size, status) VALUES ('f-pop', 1, 'd-pop', '/music/pop/1.flac', '1.flac', 'flac', 1, 'indexed'), ('f-orch', 1, 'd-orch', '/music/orch/1.flac', '1.flac', 'flac', 1, 'indexed')")
+            .execute(&pool).await.unwrap();
+        sqlx::query("INSERT INTO library_tracks (id, library_id, file_id, library_album_id, artist_id, title, title_normalized) VALUES ('t-pop', 1, 'f-pop', 'alb-pop', 'pop', 'Pop Song', 'pop song'), ('t-orch', 1, 'f-orch', 'alb-orch', 'orch', 'Allegro', 'allegro')")
+            .execute(&pool).await.unwrap();
+
+        // Both active initially
+        assert_eq!(LibraryTrackRepository::find_all_tracks_by_library_id(&pool, 1).await.unwrap().len(), 2);
+        assert_eq!(LibraryAlbumRepository::find_all_albums_by_library_id(&pool, 1, None).await.unwrap().len(), 2);
+        assert_eq!(LibraryArtistRepository::find_all_artists_by_library_id(&pool, 1).await.unwrap().len(), 2);
+
+        // Disable Orchestra folder
+        LibraryDirRepository::set_active(&pool, "d-orch", false).await.unwrap();
+        let tracks = LibraryTrackRepository::find_all_tracks_by_library_id(&pool, 1).await.unwrap();
+        let albums = LibraryAlbumRepository::find_all_albums_by_library_id(&pool, 1, None).await.unwrap();
+        let artists = LibraryArtistRepository::find_all_artists_by_library_id(&pool, 1).await.unwrap();
+        assert_eq!(tracks.iter().map(|t| t.id.as_str()).collect::<Vec<_>>(), vec!["t-pop"]);
+        assert_eq!(albums.iter().map(|a| a.id.as_str()).collect::<Vec<_>>(), vec!["alb-pop"]);
+        assert_eq!(artists.iter().map(|a| a.id.as_str()).collect::<Vec<_>>(), vec!["pop"]);
+
+        // Re-enable Orchestra folder -> everything returns without rescanning
+        LibraryDirRepository::set_active(&pool, "d-orch", true).await.unwrap();
+        assert_eq!(LibraryTrackRepository::find_all_tracks_by_library_id(&pool, 1).await.unwrap().len(), 2);
+        assert_eq!(LibraryAlbumRepository::find_all_albums_by_library_id(&pool, 1, None).await.unwrap().len(), 2);
+        assert_eq!(LibraryArtistRepository::find_all_artists_by_library_id(&pool, 1).await.unwrap().len(), 2);
     }
 }

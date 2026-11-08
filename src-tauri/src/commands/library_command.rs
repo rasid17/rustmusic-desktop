@@ -498,6 +498,39 @@ pub async fn remove_library_dir(
 }
 
 #[tauri::command]
+pub async fn set_library_dir_active(
+    state: State<'_, AppState>,
+    dir_id: String,
+    is_active: bool,
+) -> Result<(), String> {
+    LibraryDirRepository::set_active(&state.pool, &dir_id, is_active)
+        .await
+        .map_err(|e| format!("Failed to update library dir active state: {}", e))
+}
+
+#[tauri::command]
+pub async fn set_library_dir_watch(
+    state: State<'_, AppState>,
+    dir_id: String,
+    watch_enabled: bool,
+) -> Result<(), String> {
+    LibraryDirRepository::set_watch_enabled(&state.pool, &dir_id, watch_enabled)
+        .await
+        .map_err(|e| format!("Failed to update library dir watch state: {}", e))
+}
+
+#[tauri::command]
+pub async fn set_library_dirs_active_batch(
+    state: State<'_, AppState>,
+    library_id: i64,
+    active_dir_ids: Vec<String>,
+) -> Result<(), String> {
+    LibraryDirRepository::set_active_batch(&state.pool, library_id, &active_dir_ids)
+        .await
+        .map_err(|e| format!("Failed to batch update library dirs active state: {}", e))
+}
+
+#[tauri::command]
 pub async fn rescan_library_dir(
     app: tauri::AppHandle,
     state: State<'_, AppState>,
@@ -1711,6 +1744,7 @@ pub async fn get_mix_genres(state: State<'_, AppState>, library_id: i64) -> Resu
     use crate::core::mix_variety::{MIN_ARTISTES, MIN_TITRES};
     let lignes = sqlx::query_as::<_, (String, i64, i64)>(
         "SELECT lc.genre, COUNT(*) n, COUNT(DISTINCT lt.artist_id) FROM library_tracks lt
+         JOIN library_files lf ON lf.id = lt.file_id AND NOT EXISTS (SELECT 1 FROM library_dirs ld WHERE ld.id = lf.library_dir_id AND ld.is_active = 0)
          JOIN library_cache lc ON lc.id = lt.cache_id
          WHERE lt.library_id = ? AND lc.genre IS NOT NULL AND lc.genre != ''
          GROUP BY lc.genre HAVING n >= ? AND COUNT(DISTINCT lt.artist_id) >= ? ORDER BY n DESC",

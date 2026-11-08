@@ -187,6 +187,8 @@ export function audioFileToQueueTrack(audioFile: AudioFile): QueueTrack {
         path: audioFile.path,
         title: audioFile.tags?.title ?? get(t)("common.unknown_title"),
         artist: audioFile.tags?.artist,
+        album: audioFile.tags?.album ?? undefined,
+        genre: audioFile.tags?.genre ?? undefined,
         duration: audioFile?.duration,
         cover: audioFile.tags?.attached_images?.[0]?.image_src,
         position: 0

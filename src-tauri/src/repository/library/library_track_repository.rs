@@ -82,7 +82,7 @@ const PISTES_DE_DOSSIER: &str = r#"
                 lc.file_size AS file_size, lc.extra_tags AS extra_tags,
                 lc.thumbnail_path AS thumbnail_path, lc.last_scanned_at AS last_scanned_at
             FROM library_tracks lt
-            INNER JOIN library_files lf ON lf.id = lt.file_id
+            INNER JOIN library_files lf ON lf.id = lt.file_id AND NOT EXISTS (SELECT 1 FROM library_dirs ld WHERE ld.id = lf.library_dir_id AND ld.is_active = 0)
             LEFT JOIN library_cache lc ON lc.id = lt.cache_id
             LEFT JOIN library_albums la ON la.id = lt.library_album_id
             LEFT JOIN artists a ON a.id = lt.artist_id
@@ -400,7 +400,7 @@ impl LibraryTrackRepository {
                 lc.last_scanned_at                 AS last_scanned_at
 
             FROM library_tracks lt
-            INNER JOIN library_files lf ON lf.id = lt.file_id
+            INNER JOIN library_files lf ON lf.id = lt.file_id AND NOT EXISTS (SELECT 1 FROM library_dirs ld WHERE ld.id = lf.library_dir_id AND ld.is_active = 0)
             LEFT JOIN library_cache lc ON lc.id = lt.cache_id
             LEFT JOIN library_albums la ON la.id = lt.library_album_id
             LEFT JOIN artists a ON a.id = lt.artist_id
@@ -433,7 +433,7 @@ impl LibraryTrackRepository {
         let sql = format!(
             r#"SELECT SUBSTR(lt.title_normalized, 1, 1) AS c, COUNT(*) AS n
                FROM library_tracks lt
-               INNER JOIN library_files lf ON lf.id = lt.file_id
+               INNER JOIN library_files lf ON lf.id = lt.file_id AND NOT EXISTS (SELECT 1 FROM library_dirs ld WHERE ld.id = lf.library_dir_id AND ld.is_active = 0)
                LEFT JOIN library_cache lc ON lc.id = lt.cache_id
                LEFT JOIN library_albums la ON la.id = lt.library_album_id
                LEFT JOIN artists a ON a.id = lt.artist_id
@@ -489,7 +489,7 @@ impl LibraryTrackRepository {
         let count_sql = format!(
             r#"SELECT COUNT(*)
                FROM library_tracks lt
-               INNER JOIN library_files lf ON lf.id = lt.file_id
+               INNER JOIN library_files lf ON lf.id = lt.file_id AND NOT EXISTS (SELECT 1 FROM library_dirs ld WHERE ld.id = lf.library_dir_id AND ld.is_active = 0)
                LEFT JOIN library_cache lc ON lc.id = lt.cache_id
                LEFT JOIN library_albums la ON la.id = lt.library_album_id
                LEFT JOIN artists a ON a.id = lt.artist_id
@@ -533,7 +533,7 @@ impl LibraryTrackRepository {
                 lc.file_size AS file_size, lc.extra_tags AS extra_tags,
                 lc.thumbnail_path AS thumbnail_path, lc.last_scanned_at AS last_scanned_at
             FROM library_tracks lt
-            INNER JOIN library_files lf ON lf.id = lt.file_id
+            INNER JOIN library_files lf ON lf.id = lt.file_id AND NOT EXISTS (SELECT 1 FROM library_dirs ld WHERE ld.id = lf.library_dir_id AND ld.is_active = 0)
             LEFT JOIN library_cache lc ON lc.id = lt.cache_id
             LEFT JOIN library_albums la ON la.id = lt.library_album_id
             LEFT JOIN artists a ON a.id = lt.artist_id
@@ -600,7 +600,7 @@ impl LibraryTrackRepository {
                 lc.file_size AS file_size, lc.extra_tags AS extra_tags,
                 lc.thumbnail_path AS thumbnail_path, lc.last_scanned_at AS last_scanned_at
             FROM library_tracks lt
-            INNER JOIN library_files lf ON lf.id = lt.file_id
+            INNER JOIN library_files lf ON lf.id = lt.file_id AND NOT EXISTS (SELECT 1 FROM library_dirs ld WHERE ld.id = lf.library_dir_id AND ld.is_active = 0)
             LEFT JOIN library_cache lc ON lc.id = lt.cache_id
             LEFT JOIN library_albums la ON la.id = lt.library_album_id
             LEFT JOIN artists a ON a.id = lt.artist_id
@@ -654,7 +654,7 @@ impl LibraryTrackRepository {
                 lc.file_size AS file_size, lc.extra_tags AS extra_tags,
                 lc.thumbnail_path AS thumbnail_path, lc.last_scanned_at AS last_scanned_at
             FROM library_tracks lt
-            INNER JOIN library_files lf ON lf.id = lt.file_id
+            INNER JOIN library_files lf ON lf.id = lt.file_id AND NOT EXISTS (SELECT 1 FROM library_dirs ld WHERE ld.id = lf.library_dir_id AND ld.is_active = 0)
             LEFT JOIN library_cache lc ON lc.id = lt.cache_id
             LEFT JOIN library_albums la ON la.id = lt.library_album_id
             LEFT JOIN artists a ON a.id = lt.artist_id
@@ -687,6 +687,7 @@ impl LibraryTrackRepository {
             r#"
             SELECT COUNT(DISTINCT lt.id)
             FROM library_tracks lt
+            INNER JOIN library_files lf ON lf.id = lt.file_id AND NOT EXISTS (SELECT 1 FROM library_dirs ld WHERE ld.id = lf.library_dir_id AND ld.is_active = 0)
             WHERE lt.library_id = ?1
               AND (lt.artist_id = ?2 OR lt.id IN (
                 SELECT lta.library_track_id FROM library_track_artists lta WHERE lta.artist_id = ?2
@@ -857,7 +858,7 @@ impl LibraryTrackRepository {
                 lc.last_scanned_at                 AS last_scanned_at
 
             FROM library_tracks lt
-            INNER JOIN library_files lf ON lf.id = lt.file_id
+            INNER JOIN library_files lf ON lf.id = lt.file_id AND NOT EXISTS (SELECT 1 FROM library_dirs ld WHERE ld.id = lf.library_dir_id AND ld.is_active = 0)
             LEFT JOIN library_cache lc ON lc.id = lt.cache_id
             LEFT JOIN library_albums la ON la.id = lt.library_album_id
             LEFT JOIN artists a ON a.id = lt.artist_id
@@ -1005,7 +1006,7 @@ impl LibraryTrackRepository {
                 lt.library_id AS library_id
             FROM library_tracks lt
             LEFT JOIN library_cache lc ON lt.cache_id = lc.id
-            LEFT JOIN library_files lf ON lt.file_id = lf.id
+            INNER JOIN library_files lf ON lt.file_id = lf.id AND NOT EXISTS (SELECT 1 FROM library_dirs ld WHERE ld.id = lf.library_dir_id AND ld.is_active = 0)
             WHERE (LOWER(lt.title) LIKE ?1
                OR LOWER(COALESCE(lc.artist, '')) LIKE ?1)
               AND lt.library_id IN (SELECT id FROM library WHERE profil_id = ?4)
@@ -1070,7 +1071,7 @@ impl LibraryTrackRepository {
                 lc.bits_per_sample, lc.channels, lc.audio_format, lc.mime_type,
                 lc.file_size, lc.extra_tags, lc.thumbnail_path, lc.last_scanned_at
             FROM library_tracks lt
-            INNER JOIN library_files lf ON lf.id = lt.file_id
+            INNER JOIN library_files lf ON lf.id = lt.file_id AND NOT EXISTS (SELECT 1 FROM library_dirs ld WHERE ld.id = lf.library_dir_id AND ld.is_active = 0)
             LEFT JOIN library_cache lc ON lc.id = lt.cache_id
             LEFT JOIN library_albums la ON la.id = lt.library_album_id
             LEFT JOIN artists a ON a.id = lt.artist_id
@@ -1123,7 +1124,7 @@ impl LibraryTrackRepository {
                 lc.bits_per_sample, lc.channels, lc.audio_format, lc.mime_type,
                 lc.file_size, lc.extra_tags, lc.thumbnail_path, lc.last_scanned_at
             FROM library_tracks lt
-            INNER JOIN library_files lf ON lf.id = lt.file_id
+            INNER JOIN library_files lf ON lf.id = lt.file_id AND NOT EXISTS (SELECT 1 FROM library_dirs ld WHERE ld.id = lf.library_dir_id AND ld.is_active = 0)
             LEFT JOIN library_cache lc ON lc.id = lt.cache_id
             LEFT JOIN library_albums la ON la.id = lt.library_album_id
             LEFT JOIN artists a ON a.id = lt.artist_id
@@ -1171,7 +1172,7 @@ impl LibraryTrackRepository {
                 lc.bits_per_sample, lc.channels, lc.audio_format, lc.mime_type,
                 lc.file_size, lc.extra_tags, lc.thumbnail_path, lc.last_scanned_at
             FROM library_tracks lt
-            INNER JOIN library_files lf ON lf.id = lt.file_id
+            INNER JOIN library_files lf ON lf.id = lt.file_id AND NOT EXISTS (SELECT 1 FROM library_dirs ld WHERE ld.id = lf.library_dir_id AND ld.is_active = 0)
             LEFT JOIN library_cache lc ON lc.id = lt.cache_id
             LEFT JOIN library_albums la ON la.id = lt.library_album_id
             LEFT JOIN artists a ON a.id = lt.artist_id

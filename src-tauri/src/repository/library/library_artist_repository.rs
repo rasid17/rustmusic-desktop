@@ -91,9 +91,12 @@ impl LibraryArtistRepository {
 
             -- Nombre d'albums (1 sous-requête pré-agrégée)
             LEFT JOIN (
-                SELECT artist_id, COUNT(*) AS cnt
-                FROM library_albums WHERE library_id = ?1
-                GROUP BY artist_id
+                SELECT la.artist_id, COUNT(*) AS cnt
+                FROM library_albums la
+                WHERE la.library_id = ?1
+                  AND (NOT EXISTS (SELECT 1 FROM library_tracks lt0 WHERE lt0.library_album_id = la.id)
+                       OR EXISTS (SELECT 1 FROM library_tracks lt JOIN library_files lf ON lf.id = lt.file_id WHERE lt.library_album_id = la.id AND NOT EXISTS (SELECT 1 FROM library_dirs ld WHERE ld.id = lf.library_dir_id AND ld.is_active = 0)))
+                GROUP BY la.artist_id
             ) album_stats ON album_stats.artist_id = a.id
 
             -- Les deux rattachements : `library_tracks.artist_id` (principal)
@@ -104,6 +107,7 @@ impl LibraryArtistRepository {
                 FROM (
                     SELECT lt.artist_id AS artist_id, lt.id AS track_id, lt.duration AS duration
                     FROM library_tracks lt
+                    INNER JOIN library_files lf ON lf.id = lt.file_id AND NOT EXISTS (SELECT 1 FROM library_dirs ld WHERE ld.id = lf.library_dir_id AND ld.is_active = 0)
                     WHERE lt.library_id = ?1 AND lt.artist_id IS NOT NULL
 
                     UNION
@@ -111,6 +115,7 @@ impl LibraryArtistRepository {
                     SELECT lta.artist_id, lt.id, lt.duration
                     FROM library_track_artists lta
                     INNER JOIN library_tracks lt ON lt.id = lta.library_track_id
+                    INNER JOIN library_files lf ON lf.id = lt.file_id AND NOT EXISTS (SELECT 1 FROM library_dirs ld WHERE ld.id = lf.library_dir_id AND ld.is_active = 0)
                     WHERE lta.library_id = ?1
                 )
                 GROUP BY artist_id

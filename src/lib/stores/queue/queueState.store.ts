@@ -305,14 +305,18 @@ export const queueState = {
                 originalTracks = [...qs.tracks];
             }
 
-            let shuffled = fairShuffle(originalTracks, newShuffleSeed());
+            const anchorTrack = currentTrackId
+                ? originalTracks.find((t: QueueTrack) => t.queueId === currentTrackId)
+                : undefined;
+            const remaining = anchorTrack
+                ? originalTracks.filter((t: QueueTrack) => t.queueId !== currentTrackId)
+                : originalTracks;
+
+            let shuffled = fairShuffle(remaining, newShuffleSeed(), 4, anchorTrack);
 
             // Placer la piste en cours en première position
-            if (currentTrackId) {
-                const idx = shuffled.findIndex((t: QueueTrack) => t.queueId === currentTrackId);
-                if (idx > 0) {
-                    [shuffled[0], shuffled[idx]] = [shuffled[idx], shuffled[0]];
-                }
+            if (anchorTrack) {
+                shuffled = [anchorTrack, ...shuffled];
             }
 
             // Recalculer les positions
@@ -372,6 +376,11 @@ export const queueState = {
         if (!get(queueStateWritable).isShuffled) return;
         await queueState.setIsShuffled(true);
     },
+    /** Bascule l'état aléatoire (shuffle ON/OFF). */
+    toggleShuffle: async () => {
+        const current = get(queueStateWritable).isShuffled;
+        await queueState.setIsShuffled(!current);
+    },
     setRepeatMode: async (repeatMode: QueueState["repeatMode"]) => {
         queueStateWritable.update((qs) => ({ ...qs, repeatMode }))
 
@@ -395,6 +404,8 @@ export const queueState = {
             position: 0,
             title: audioFile.tags.title as string,
             artist: audioFile.tags.artist as string,
+            album: audioFile.tags.album ?? undefined,
+            genre: audioFile.tags.genre ?? undefined,
             duration: audioFile.duration as number,
             // `?.[0]?.` et non `?.[0].` : le premier point d'interrogation ne
             // protège que l'absence du tableau. Sur une liste **vide** — un

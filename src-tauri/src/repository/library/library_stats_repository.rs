@@ -15,7 +15,7 @@ impl LibraryStatsRepository {
                 COALESCE(AVG(NULLIF(lt.bitrate, 0)), 0) AS avg_bitrate,
                 COALESCE(SUM(lt.play_count), 0) AS total_play_count
             FROM library_tracks lt
-            INNER JOIN library_files lf ON lf.id = lt.file_id
+            INNER JOIN library_files lf ON lf.id = lt.file_id AND NOT EXISTS (SELECT 1 FROM library_dirs ld WHERE ld.id = lf.library_dir_id AND ld.is_active = 0)
             WHERE lt.library_id = ?"#,
         )
         .bind(library_id)
@@ -25,7 +25,10 @@ impl LibraryStatsRepository {
 
     pub async fn count_albums(pool: &SqlitePool, library_id: i64) -> i64 {
         sqlx::query_scalar::<_, i64>(
-            "SELECT COUNT(*) FROM library_albums WHERE library_id = ?",
+            "SELECT COUNT(*) FROM library_albums la
+             WHERE la.library_id = ?
+               AND (NOT EXISTS (SELECT 1 FROM library_tracks lt0 WHERE lt0.library_album_id = la.id)
+                    OR EXISTS (SELECT 1 FROM library_tracks lt JOIN library_files lf ON lf.id = lt.file_id WHERE lt.library_album_id = la.id AND NOT EXISTS (SELECT 1 FROM library_dirs ld WHERE ld.id = lf.library_dir_id AND ld.is_active = 0)))",
         )
         .bind(library_id)
         .fetch_one(pool)
@@ -44,13 +47,18 @@ impl LibraryStatsRepository {
                    INTERSECT
                    SELECT artist_id FROM (
                        SELECT lt.artist_id FROM library_tracks lt
+                       INNER JOIN library_files lf ON lf.id = lt.file_id AND NOT EXISTS (SELECT 1 FROM library_dirs ld WHERE ld.id = lf.library_dir_id AND ld.is_active = 0)
                        WHERE lt.library_id = ?1 AND lt.artist_id IS NOT NULL
                        UNION
                        SELECT lta.artist_id FROM library_track_artists lta
+                       INNER JOIN library_tracks lt ON lt.id = lta.library_track_id
+                       INNER JOIN library_files lf ON lf.id = lt.file_id AND NOT EXISTS (SELECT 1 FROM library_dirs ld WHERE ld.id = lf.library_dir_id AND ld.is_active = 0)
                        WHERE lta.library_id = ?1
                        UNION
                        SELECT lb.artist_id FROM library_albums lb
                        WHERE lb.library_id = ?1 AND lb.artist_id IS NOT NULL
+                         AND (NOT EXISTS (SELECT 1 FROM library_tracks lt0 WHERE lt0.library_album_id = lb.id)
+                              OR EXISTS (SELECT 1 FROM library_tracks lt JOIN library_files lf ON lf.id = lt.file_id WHERE lt.library_album_id = lb.id AND NOT EXISTS (SELECT 1 FROM library_dirs ld WHERE ld.id = lf.library_dir_id AND ld.is_active = 0)))
                    )
                )"#,
         )
@@ -64,6 +72,7 @@ impl LibraryStatsRepository {
         sqlx::query_scalar::<_, i64>(
             r#"SELECT COUNT(DISTINCT lc.genre) FROM library_cache lc
                INNER JOIN library_tracks lt ON lt.cache_id = lc.id
+               INNER JOIN library_files lf ON lf.id = lt.file_id AND NOT EXISTS (SELECT 1 FROM library_dirs ld WHERE ld.id = lf.library_dir_id AND ld.is_active = 0)
                WHERE lt.library_id = ? AND lc.genre IS NOT NULL AND lc.genre != ''"#,
         )
         .bind(library_id)
@@ -79,7 +88,7 @@ impl LibraryStatsRepository {
         sqlx::query_as::<_, (String, i64)>(
             r#"SELECT UPPER(COALESCE(lc.audio_format, lf.extension)) AS fmt, COUNT(*) AS cnt
                FROM library_tracks lt
-               INNER JOIN library_files lf ON lf.id = lt.file_id
+               INNER JOIN library_files lf ON lf.id = lt.file_id AND NOT EXISTS (SELECT 1 FROM library_dirs ld WHERE ld.id = lf.library_dir_id AND ld.is_active = 0)
                LEFT JOIN library_cache lc ON lc.id = lt.cache_id
                WHERE lt.library_id = ?
                GROUP BY fmt ORDER BY cnt DESC"#,
@@ -93,6 +102,7 @@ impl LibraryStatsRepository {
     pub async fn count_quality_hires(pool: &SqlitePool, library_id: i64) -> i64 {
         sqlx::query_scalar::<_, i64>(
             r#"SELECT COUNT(*) FROM library_tracks lt
+               INNER JOIN library_files lf ON lf.id = lt.file_id AND NOT EXISTS (SELECT 1 FROM library_dirs ld WHERE ld.id = lf.library_dir_id AND ld.is_active = 0)
                LEFT JOIN library_cache lc ON lc.id = lt.cache_id
                WHERE lt.library_id = ? AND lc.bits_per_sample >= 24"#,
         )
@@ -105,6 +115,7 @@ impl LibraryStatsRepository {
     pub async fn count_quality_lossless(pool: &SqlitePool, library_id: i64) -> i64 {
         sqlx::query_scalar::<_, i64>(
             r#"SELECT COUNT(*) FROM library_tracks lt
+               INNER JOIN library_files lf ON lf.id = lt.file_id AND NOT EXISTS (SELECT 1 FROM library_dirs ld WHERE ld.id = lf.library_dir_id AND ld.is_active = 0)
                LEFT JOIN library_cache lc ON lc.id = lt.cache_id
                WHERE lt.library_id = ? AND lc.bits_per_sample = 16
                AND LOWER(lc.audio_format) IN ('flac', 'wav', 'alac', 'aiff')"#,
@@ -120,6 +131,7 @@ impl LibraryStatsRepository {
             r#"SELECT lc.genre AS name, COUNT(*) AS cnt
                FROM library_cache lc
                INNER JOIN library_tracks lt ON lt.cache_id = lc.id
+               INNER JOIN library_files lf ON lf.id = lt.file_id AND NOT EXISTS (SELECT 1 FROM library_dirs ld WHERE ld.id = lf.library_dir_id AND ld.is_active = 0)
                WHERE lt.library_id = ? AND lc.genre IS NOT NULL AND lc.genre != ''
                GROUP BY lc.genre ORDER BY cnt DESC LIMIT 10"#,
         )
@@ -137,6 +149,7 @@ impl LibraryStatsRepository {
                FROM (
                    SELECT lt.artist_id AS artist_id, lt.id AS track_id
                    FROM library_tracks lt
+                   INNER JOIN library_files lf ON lf.id = lt.file_id AND NOT EXISTS (SELECT 1 FROM library_dirs ld WHERE ld.id = lf.library_dir_id AND ld.is_active = 0)
                    WHERE lt.library_id = ?1 AND lt.artist_id IS NOT NULL
 
                    UNION
@@ -144,6 +157,7 @@ impl LibraryStatsRepository {
                    SELECT lta.artist_id, lt.id
                    FROM library_track_artists lta
                    INNER JOIN library_tracks lt ON lt.id = lta.library_track_id
+                   INNER JOIN library_files lf ON lf.id = lt.file_id AND NOT EXISTS (SELECT 1 FROM library_dirs ld WHERE ld.id = lf.library_dir_id AND ld.is_active = 0)
                    WHERE lta.library_id = ?1
                ) paires
                INNER JOIN artists a ON a.id = paires.artist_id
@@ -166,6 +180,7 @@ impl LibraryStatsRepository {
                 lt.play_count,
                 lc.thumbnail_path
                FROM library_tracks lt
+               INNER JOIN library_files lf ON lf.id = lt.file_id AND NOT EXISTS (SELECT 1 FROM library_dirs ld WHERE ld.id = lf.library_dir_id AND ld.is_active = 0)
                LEFT JOIN library_cache lc ON lc.id = lt.cache_id
                WHERE lt.library_id = ? AND lt.play_count > 0
                ORDER BY lt.play_count DESC LIMIT 10"#,
