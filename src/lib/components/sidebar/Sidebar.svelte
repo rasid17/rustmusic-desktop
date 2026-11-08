@@ -9,6 +9,7 @@ import { liked, likedCount } from "#lib/stores/playlist/like.store";
 import { popinStore } from "#lib/stores/ui/popin.store";
 import AddLibraryPopin from "#lib/components/library/common/popin/AddLibraryPopin.svelte";
 import AddPlaylistPopin from "#lib/components/playlist/popin/AddPlaylistPopin.svelte";
+import AiPlaylistPopin from "#lib/components/playlist/popin/AiPlaylistPopin.svelte";
 import SmartPlaylistPopin from "#lib/components/playlist/smart/SmartPlaylistPopin.svelte";
 import PlaylistZoneMenu from "#lib/components/ui/contextmenu/PlaylistZoneMenu.svelte";
 import LibraryZoneMenu from "#lib/components/ui/contextmenu/LibraryZoneMenu.svelte";
@@ -181,6 +182,13 @@ onMount(() => {
     {#if !replie}
       <SidebarTitle titre={$t('nav.playlists')} aide={$t('playlists_view.all')} onclick={() => nav('/playlists')}>
         {#snippet actions()}
+          <SidebarButton
+            icon="material-symbols:smart-toy-outline-rounded"
+            label="AI Playlist Generator (Prompt)"
+            taille={16}
+            onclick={() => popinStore.open("AI Playlist Generator", AiPlaylistPopin, { libraryId },
+              { size: 'lg', icon: 'material-symbols:auto-awesome-rounded' })}
+          />
           <SidebarButton
             icon="material-symbols:auto-awesome-outline-rounded"
             label={$t('playlist.new_smart')}

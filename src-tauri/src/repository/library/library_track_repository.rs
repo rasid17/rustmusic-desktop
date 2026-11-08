@@ -1044,7 +1044,7 @@ impl LibraryTrackRepository {
             "hasard" => "1 = 1".into(),
             "genre" if genre.is_some() => {
                 textes.push(genre.unwrap_or_default().to_string());
-                "LOWER(lc.genre) = LOWER(?)".into()
+                "LOWER(TRIM(lc.genre)) = LOWER(TRIM(?))".into()
             }
             // L'année de l'album d'abord : c'est elle qui range les albums par décennie.
             "decennie" if decennie.is_some() => "COALESCE(la.year, CAST(substr(lc.year, 1, 4) AS INTEGER)) BETWEEN ? AND ? + 9".into(),

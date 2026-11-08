@@ -11,11 +11,21 @@
   import PopinFooter from "#lib/components/ui/popin/PopinFooter.svelte";
   import type { Playlist } from "#lib/types/db/playlist/Playlist";
   import { serverStore } from "#lib/stores/mediaServer/mediaServer.store";
+  import { libraryStore } from "#lib/stores/library/library.store";
   import StatusDot from "#lib/components/ui/status/StatusDot.svelte";
   import { currentSource } from "#lib/stores/source/source.store";
+  import AiPlaylistPopin from "./AiPlaylistPopin.svelte";
 
   /** Appelé avec la playlist créée — sert à y verser aussitôt un morceau. */
   let { apresCreation }: { apresCreation?: (pl: Playlist) => void } = $props();
+  const libraryId = $derived($libraryStore.librarySelected?.id ?? null);
+
+  function openAiGenerator() {
+    popinStore.open("AI Playlist Generator", AiPlaylistPopin, { libraryId }, {
+      size: "lg",
+      icon: "material-symbols:auto-awesome-rounded",
+    });
+  }
 
   let name = $state("");
   let description = $state("");
@@ -86,6 +96,23 @@
 </script>
 
 <div class="space-y-6">
+  <button
+    type="button"
+    onclick={openAiGenerator}
+    class="w-full flex items-center justify-between gap-3 px-3.5 py-2.5 rounded-xl border border-purple-500/35 bg-purple-500/10 hover:bg-purple-500/15 text-left transition cursor-pointer"
+  >
+    <div class="flex items-center gap-2.5 min-w-0">
+      <div class="w-8 h-8 rounded-lg bg-purple-500/20 text-purple-400 flex items-center justify-center shrink-0">
+        <Icon icon="material-symbols:smart-toy-outline-rounded" width="18" />
+      </div>
+      <div class="min-w-0">
+        <div class="text-xs font-bold text-purple-300">Buat Playlist dengan Prompt AI</div>
+        <div class="text-[11px] text-neutral-400 truncate">Ketik suasana/genre (misal: "lagu santai malam hari")</div>
+      </div>
+    </div>
+    <Icon icon="material-symbols:arrow-forward-ios-rounded" width="14" class="text-purple-400 shrink-0" />
+  </button>
+
   <!-- La playlist telle qu'elle apparaîtra -->
   <div class="flex items-center gap-4 p-3.5 rounded-2xl border transition-colors"
        style="border-color: color-mix(in oklab, {selectedColor} 30%, transparent); background: linear-gradient(135deg, color-mix(in oklab, {selectedColor} 12%, transparent), transparent);">

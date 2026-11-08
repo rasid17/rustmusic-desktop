@@ -26,16 +26,34 @@ type T = (cle: string) => string;
 // En dessous, un genre ou une décennie ne fait pas un mix.
 export const MIN_TITRES_MIX = 10;
 
+function uniqueGenres(genres: GenreMix[]): GenreMix[] {
+  const map = new Map<string, GenreMix>();
+  for (const g of genres) {
+    if (!g?.nom) continue;
+    const k = g.nom.trim().toLowerCase();
+    if (!k) continue;
+    const prev = map.get(k);
+    if (prev) {
+      prev.titres += g.titres ?? 0;
+      prev.artistes = Math.max(prev.artistes ?? 0, g.artistes ?? 0);
+    } else {
+      map.set(k, { ...g, nom: g.nom.trim() });
+    }
+  }
+  return [...map.values()];
+}
+
 const specGenre = (g: GenreMix, t: T, type: string): SpecMix => ({
-  cle: `genre:${g.nom.toLowerCase()}`, type, nom: g.nom,
-  aide: t("mix_view.genre_desc").replace("{n}", String(g.artistes)), h: hue(g.nom.toLowerCase()),
+  cle: `genre:${g.nom.trim().toLowerCase()}`, type, nom: g.nom,
+  aide: t("mix_view.genre_desc").replace("{n}", String(g.artistes)), h: hue(g.nom.trim().toLowerCase()),
   source: { kind: "genre", genre: g.nom },
 });
 
 /** « Pour vous » : deux genres du jour (ils tournent parmi les plus fournis), les oubliés, le Hi-Res. */
 export function mixesForYou(genres: GenreMix[], hires: number, t: T): SpecMix[] {
-  if (genres.length === 0) return [];
-  const tournants = genres.slice(0, 6);
+  const uniques = uniqueGenres(genres);
+  if (uniques.length === 0) return [];
+  const tournants = uniques.slice(0, 6);
   const jour = Math.floor(Date.now() / 86_400_000);
   const choisis = tournants.length <= 2 ? tournants : [tournants[jour % tournants.length], tournants[(jour + 1) % tournants.length]];
   const liste: SpecMix[] = choisis.map((g) => specGenre(g, t, t("home.mix_of_day")));
@@ -47,7 +65,7 @@ export function mixesForYou(genres: GenreMix[], hires: number, t: T): SpecMix[] 
 
 /** Un mix par genre assez varié (le serveur a déjà écarté les autres), les plus fournis d'abord. */
 export function mixGenres(genres: GenreMix[], t: T): SpecMix[] {
-  return genres.map((g) => specGenre(g, t, t("mix_view.genre_kind")));
+  return uniqueGenres(genres).map((g) => specGenre(g, t, t("mix_view.genre_kind")));
 }
 
 /** Une décennie par tranche d'albums datés : « 80 » avant 2000, « 2010 » après. */

@@ -157,7 +157,7 @@
         <Icon icon="material-symbols:more-horiz" width="20" />
       </button>
       <Menu bind:open={menu} class="w-60">
-        {#each actions as act (act.libelle)}
+        {#each actions as act, idx (`${idx}:${act.libelle}`)}
           <MenuItem icon={act.icone} danger={act.danger} onclick={() => { menu = false; act.agir(liste ?? []); }}>{act.libelle}</MenuItem>
         {/each}
       </Menu>
