@@ -40,6 +40,14 @@
     type RenderMode,
     type DmabufMode,
   } from "#lib/services/system/renderMode.service";
+  import { miniPlayerStyle, type MiniPlayerStyle } from "#lib/stores/ui/miniWindow.store";
+
+  function handleMiniStyleSetting(style: MiniPlayerStyle) {
+    try {
+      localStorage.setItem("rustmusic:mini-style", style);
+    } catch {}
+    miniPlayerStyle.set(style);
+  }
 
   // `!== 'false'` : sans réglage en base, le défaut est « visible ».
   const visible = (cle: keyof AppSettings) => $settingsStore[cle] !== "false";
@@ -375,6 +383,22 @@
 
 <!-- ─── Mini-lecteur ─── -->
 <OptionGroup title={$t("settings.mini_group")} hint={$t("settings.mini_group_hint")}>
+  <OptionItem
+    title="Mini player style"
+    desc="Choose between Classic (Card / Bar / Cover), Pill (spinning round cover), or Sleeve (spinning Compact Disc + EQ bars)."
+    keywords="mini style pill sleeve classic"
+  >
+    <SegmentedControl
+      value={$miniPlayerStyle}
+      options={[
+        { value: "classic", label: "Classic" },
+        { value: "pill", label: "Pill" },
+        { value: "sleeve", label: "Sleeve" },
+      ]}
+      label="Mini player style"
+      onchange={(v) => handleMiniStyleSetting(v as MiniPlayerStyle)}
+    />
+  </OptionItem>
   <OptionItem title={$t("settings.mini_volume_layout")} desc={$t("settings.mini_volume_layout_desc")} keywords="mini volume">
     <SegmentedControl
       value={$settingsStore.mini_volume_layout === "horizontal" ? "horizontal" : "vertical"}

@@ -14,7 +14,16 @@
   import { playbackPipelineStore } from "#lib/stores/player/playbackPipeline.store";
   import { couleurMorceau } from "#lib/stores/player/trackColor.store";
   import { minutesSeconds } from "#lib/helper/tools/dateTools";
-  import { exitMicroPlayer, miniPinned, toggleMiniPin, resizeMicroPlayer, endMicroResize, currentMicroSize } from "#lib/stores/ui/miniWindow.store";
+  import {
+    exitMicroPlayer,
+    miniPinned,
+    toggleMiniPin,
+    resizeMicroPlayer,
+    endMicroResize,
+    currentMicroSize,
+    setMiniStyle,
+    miniPlayerStyle,
+  } from "#lib/stores/ui/miniWindow.store";
   import { sendCmd } from "#lib/services/mini/miniBridge";
 
   const NO_COVER = "/images/no-cd.png";
@@ -165,6 +174,12 @@
       {/if}
       <button type="button" class="{topButton} {$miniPinned ? 'text-(--lc-acc)!' : ''}" title={$t("mini.pin")} aria-label={$t("mini.pin")} aria-pressed={$miniPinned} onclick={toggleMiniPin}>
         <Icon icon={$miniPinned ? "material-symbols:keep" : "material-symbols-light:keep-outline"} width="16" />
+      </button>
+      <button type="button" class={topButton} title="Pill style" aria-label="Pill style" onclick={() => void setMiniStyle("pill")}>
+        <Icon icon="ph:vinyl-record-duotone" width="16" />
+      </button>
+      <button type="button" class={topButton} title="Sleeve style" aria-label="Sleeve style" onclick={() => void setMiniStyle("sleeve")}>
+        <Icon icon="ph:disc-duotone" width="16" />
       </button>
       <button type="button" class={topButton} title={$t("mini.back_to_mini")} aria-label={$t("mini.back_to_mini")} onclick={() => exitMicroPlayer()}>
         <Icon icon="material-symbols-light:open-in-full-rounded" width="16" />

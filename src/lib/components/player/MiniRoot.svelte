@@ -8,7 +8,7 @@
   import { getCurrentWindow } from "@tauri-apps/api/window";
   import MiniPlayer from "./MiniPlayer.svelte";
   import MicroPlayer from "./MicroPlayer.svelte";
-  import { microPlayerActive } from "#lib/stores/ui/miniWindow.store";
+  import { microPlayerActive, syncMiniStyleFromStorage } from "#lib/stores/ui/miniWindow.store";
   import { settingsStore } from "#lib/stores/settings/settings.store";
   import { initPlaybackPipelineListener } from "#lib/stores/player/playbackPipeline.store";
   import { initMiniClient, notifyMainReady, sendCmd } from "#lib/services/mini/miniBridge";
@@ -52,9 +52,11 @@
   onMount(async () => {
     // L'écran de chargement d'app.html n'a pas lieu d'être : le lecteur est déjà là.
     document.getElementById("demarrage")?.remove();
+    document.documentElement.classList.add("mini-window-transparent");
 
     const win = getCurrentWindow();
     const afficher = async () => {
+      syncMiniStyleFromStorage();
       await win.show();
       await win.setFocus();
       // La fenêtre principale attend ce signal pour se masquer.

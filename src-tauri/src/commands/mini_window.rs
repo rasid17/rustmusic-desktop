@@ -34,12 +34,13 @@ pub fn open_mini_window(app: AppHandle, pinned: bool) -> Result<(), String> {
         // taille au fil de la session.
         .resizable(true)
         .decorations(false)
+        .transparent(true)
         .always_on_top(pinned)
         .skip_taskbar(true)
         // Créée cachée : l'interface l'affiche une fois peinte et dimensionnée, sans flash blanc.
         .visible(false)
-        // Même fond que la fenêtre principale (tauri.conf.json) : pas d'écran blanc au départ.
-        .background_color(tauri::window::Color(11, 13, 12, 255))
+        // Fond transparent RGBA pour permettre les silhouettes Pill (pochette ronde débordante) et Sleeve.
+        .background_color(tauri::window::Color(0, 0, 0, 0))
         .build()
         .map_err(|e| format!("création de la fenêtre mini : {e}"))?;
     log::info!("🪟  Fenêtre mini créée (épinglée : {pinned})");
