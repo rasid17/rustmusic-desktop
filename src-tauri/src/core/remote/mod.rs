@@ -4,6 +4,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::core::dlna_client::client::Server as Dlna;
 use crate::core::jellyfin::client::Server as Jellyfin;
+use crate::core::qobuz::client::{Server as Qobuz, API_BASE as QOBUZ_API_BASE, DEFAULT_APP_ID, DEFAULT_APP_SECRET};
 use crate::core::subsonic::client::{Auth, Server as Subsonic};
 pub use crate::core::subsonic::catalog::RemoteSong;
 pub use crate::core::subsonic::client::{MusicFolder, ServerInfo};
@@ -40,6 +41,7 @@ pub enum Kind {
     Subsonic,
     Jellyfin,
     Dlna,
+    Qobuz,
 }
 
 impl Kind {
@@ -48,6 +50,7 @@ impl Kind {
             Kind::Subsonic => "subsonic",
             Kind::Jellyfin => "jellyfin",
             Kind::Dlna => "dlna",
+            Kind::Qobuz => "qobuz",
         }
     }
 
@@ -55,6 +58,7 @@ impl Kind {
         match s.to_ascii_lowercase().as_str() {
             "jellyfin" => Kind::Jellyfin,
             "dlna" => Kind::Dlna,
+            "qobuz" => Kind::Qobuz,
             _ => Kind::Subsonic,
         }
     }
@@ -75,6 +79,7 @@ pub enum Backend {
     Subsonic(Subsonic),
     Jellyfin(Jellyfin),
     Dlna(Dlna),
+    Qobuz(Qobuz),
 }
 
 impl Backend {
@@ -103,6 +108,10 @@ impl Backend {
                 let (s, info) = Dlna::connect(url).await?;
                 Ok((Backend::Dlna(s), info))
             }
+            Kind::Qobuz => {
+                let (s, info) = Qobuz::connect(url, username, password, api_key).await?;
+                Ok((Backend::Qobuz(s), info))
+            }
         }
     }
 
@@ -127,6 +136,18 @@ impl Backend {
                 }
             }
             Kind::Dlna => Backend::Dlna(Dlna { location: url }),
+            Kind::Qobuz => {
+                let token = stored.token.filter(|t| !t.is_empty()).ok_or_else(missing)?;
+                let app_id = stored.api_key.filter(|k| !k.is_empty()).unwrap_or_else(|| DEFAULT_APP_ID.to_string());
+                let app_secret = stored.salt.filter(|s| !s.is_empty()).unwrap_or_else(|| DEFAULT_APP_SECRET.to_string());
+                let user_id = stored.user_id.unwrap_or(username);
+                let base = if url.is_empty() || url.starts_with("qobuz://") {
+                    QOBUZ_API_BASE.to_string()
+                } else {
+                    url
+                };
+                Backend::Qobuz(Qobuz { base, app_id, app_secret, token, user_id })
+            }
         })
     }
 
@@ -144,6 +165,12 @@ impl Backend {
                 ..Default::default()
             },
             Backend::Dlna(_) => Stored::default(),
+            Backend::Qobuz(q) => Stored {
+                token: Some(q.token.clone()),
+                salt: Some(q.app_secret.clone()),
+                api_key: Some(q.app_id.clone()),
+                user_id: Some(q.user_id.clone()),
+            },
         }
     }
 
@@ -152,6 +179,7 @@ impl Backend {
             Backend::Subsonic(_) => Kind::Subsonic,
             Backend::Jellyfin(_) => Kind::Jellyfin,
             Backend::Dlna(_) => Kind::Dlna,
+            Backend::Qobuz(_) => Kind::Qobuz,
         }
     }
 
@@ -160,10 +188,11 @@ impl Backend {
             Backend::Subsonic(s) => &s.base,
             Backend::Jellyfin(j) => &j.base,
             Backend::Dlna(d) => &d.location,
+            Backend::Qobuz(q) => &q.base,
         }
     }
 
-    /// Le serveur tient des notes de 1 à 5 par utilisateur (Jellyfin, DLNA : non).
+    /// Le serveur tient des notes de 1 à 5 par utilisateur (Jellyfin, DLNA, Qobuz : non).
     pub fn has_ratings(&self) -> bool {
         matches!(self, Backend::Subsonic(_))
     }
@@ -173,6 +202,7 @@ impl Backend {
             Backend::Subsonic(s) => s.ping().await,
             Backend::Jellyfin(j) => j.ping().await,
             Backend::Dlna(d) => d.ping().await,
+            Backend::Qobuz(q) => q.ping().await,
         }
     }
 
@@ -181,6 +211,7 @@ impl Backend {
             Backend::Subsonic(s) => s.music_folders().await,
             Backend::Jellyfin(j) => j.music_folders().await,
             Backend::Dlna(d) => Ok(d.folders("0").await?.into_iter().map(|f| MusicFolder { id: f.id, name: f.name }).collect()),
+            Backend::Qobuz(q) => q.music_folders().await,
         }
     }
 
@@ -203,6 +234,7 @@ impl Backend {
             Backend::Subsonic(s) => s.all_songs(folder_id, progress).await,
             Backend::Jellyfin(j) => j.all_songs(folder_id, progress).await,
             Backend::Dlna(d) => d.all_songs(folder_id, progress).await,
+            Backend::Qobuz(q) => q.all_songs(folder_id, progress).await,
         }
     }
 
@@ -211,6 +243,7 @@ impl Backend {
             Backend::Subsonic(s) => s.cover_art(id, size).await,
             Backend::Jellyfin(j) => j.cover_art(id, size).await,
             Backend::Dlna(d) => d.cover_art(id).await,
+            Backend::Qobuz(q) => q.cover_art(id, size).await,
         }
     }
 
@@ -227,6 +260,7 @@ impl Backend {
             }
             Backend::Jellyfin(j) => j.stream_url(song_id, transcode),
             Backend::Dlna(d) => d.stream_url(song_id).await,
+            Backend::Qobuz(q) => q.stream_url(song_id, transcode).await,
         }
     }
 
@@ -235,7 +269,7 @@ impl Backend {
         match self {
             Backend::Subsonic(s) => s.lyrics(song_id, structured, artist, title).await,
             Backend::Jellyfin(j) => j.lyrics(song_id).await,
-            Backend::Dlna(_) => Ok(None),
+            Backend::Dlna(_) | Backend::Qobuz(_) => Ok(None),
         }
     }
 }

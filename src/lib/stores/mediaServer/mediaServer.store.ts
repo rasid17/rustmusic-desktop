@@ -11,7 +11,8 @@ import { liked } from "#lib/stores/playlist/like.store";
 import { playlistStore } from "#lib/stores/playlist/playlist.store";
 import { offlineStore } from "#lib/stores/mediaServer/offline.store";
 import { recent } from "#lib/stores/recent/recent.store";
-import type { DlnaFolder, DlnaFound, MusicFolder, ServerEntry, ServerKind, ServerProbe } from "#lib/types/ui/mediaServer/MediaServer";
+import type { DlnaFolder, DlnaFound, MusicFolder, QobuzSearchResults, ServerEntry, ServerKind, ServerProbe } from "#lib/types/ui/mediaServer/MediaServer";
+import type { SourceDeFile } from "#lib/mapper/queue/mapQueueTrack";
 import { remoteServerId } from "#lib/types/db/library/Library";
 
 type ServerState = {
@@ -104,6 +105,24 @@ export const serverStore = {
   discover: () => invoke<DlnaFound[]>("server_discover"),
   /** Sous-dossiers d'un serveur DLNA (`0` : la racine). */
   browse: (url: string, objectId: string) => invoke<DlnaFolder[]>("server_browse", { url, objectId }),
+
+  /** Recherche d'albums et de morceaux dans le catalogue global Qobuz. */
+  qobuzSearch: (serverId: number, query: string) =>
+    invoke<QobuzSearchResults>("qobuz_search", { serverId, query }),
+
+  /** Importe un album Qobuz complet dans la bibliothèque locale et renvoie ses pistes prêtes à être jouées. */
+  async qobuzImportAlbum(serverId: number, albumId: string, favorite = false): Promise<SourceDeFile[]> {
+    const tracks = await invoke<SourceDeFile[]>("qobuz_import_album", { serverId, albumId, favorite });
+    await afterChange();
+    return tracks;
+  },
+
+  /** Importe un morceau Qobuz dans la bibliothèque locale et renvoie la piste prête à être jouée. */
+  async qobuzImportTrack(serverId: number, trackId: string, favorite = false): Promise<SourceDeFile> {
+    const track = await invoke<SourceDeFile>("qobuz_import_track", { serverId, trackId, favorite });
+    await afterChange();
+    return track;
+  },
 
   async addLibraries(serverId: number, folderIds: string[]) {
     await invoke("server_add_libraries", { serverId, folderIds });

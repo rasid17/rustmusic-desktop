@@ -14,6 +14,7 @@
   import Badge from "#lib/components/ui/text/Badge.svelte";
   import AddServerPopin from "#lib/components/mediaServer/AddServerPopin.svelte";
   import ServerFoldersPopin from "#lib/components/mediaServer/ServerFoldersPopin.svelte";
+  import QobuzCatalogPopin from "#lib/components/mediaServer/QobuzCatalogPopin.svelte";
   import StatusDot from "#lib/components/ui/status/StatusDot.svelte";
   import SelectField from "#lib/components/ui/input/SelectField.svelte";
   import TypedConfirmDialog from "#lib/components/ui/dialog/TypedConfirmDialog.svelte";
@@ -36,6 +37,12 @@
     { value: "mp3-192", label: "MP3 192 kbit/s" },
     { value: "mp3-128", label: "MP3 128 kbit/s" },
   ]);
+  const qobuzQualities = [
+    { value: "raw", label: "FLAC Hi-Res 24-bit / 192 kHz (Bit-Perfect)" },
+    { value: "flac-96", label: "FLAC Hi-Res 24-bit / 96 kHz (Bit-Perfect)" },
+    { value: "flac-44", label: "FLAC CD 16-bit / 44.1 kHz (Bit-Perfect)" },
+    { value: "mp3-320", label: "MP3 320 kbit/s" },
+  ];
   const qualityOf = (s: ServerEntry) => (s.transcode_format ? `${s.transcode_format}-${s.transcode_bitrate ?? 192}` : "raw");
   function setQuality(s: ServerEntry, value: string) {
     const [format, bitrate] = value === "raw" ? [null, null] : [value.split("-")[0], Number(value.split("-")[1])];
@@ -44,6 +51,9 @@
 
   const openFolders = (s: ServerEntry) =>
     popinStore.open($t("servers.folders_title").replace("{name}", s.name), ServerFoldersPopin, { server: s }, { size: "lg", icon: "material-symbols:folder-open-outline-rounded" });
+
+  const openQobuzCatalog = (s: ServerEntry) =>
+    popinStore.open(`Qobuz Hi-Res Catalog — ${s.name}`, QobuzCatalogPopin, { server: s }, { size: "lg", icon: "material-symbols:high-quality-outline-rounded" });
 
   const addServer = () =>
     popinStore.open($t("servers.add"), AddServerPopin, {}, { size: "lg", icon: "material-symbols:cloud-outline-rounded" });
@@ -130,7 +140,7 @@
         </div>
         {#if s.enabled && s.kind !== "dlna"}
           <span class="max-sm:hidden" title={$t("servers.quality_hint")}>
-            <SelectField value={qualityOf(s)} options={qualities} label={$t("servers.quality")} onchange={(v) => setQuality(s, v)} />
+            <SelectField value={qualityOf(s)} options={s.kind === "qobuz" ? qobuzQualities : qualities} label={$t("servers.quality")} onchange={(v) => setQuality(s, v)} />
           </span>
         {/if}
         <ToggleSwitch checked={s.enabled} label={$t("servers.enabled")} onclick={() => run(() => serverStore.setEnabled(s.id, !s.enabled))} />
@@ -148,6 +158,9 @@
           <span class="text-[12px] text-(--rg-mu) max-md:hidden">
             {syncedAt(s) ? $t("servers.synced_at").replace("{date}", syncedAt(s) ?? "") : $t("servers.never_synced")}
           </span>
+          {#if s.kind === "qobuz"}
+            <GhostButton icon="material-symbols:travel-explore-rounded" label="Qobuz Catalog" onclick={() => openQobuzCatalog(s)} />
+          {/if}
           <GhostButton icon="material-symbols:create-new-folder-outline-rounded" label={$t("servers.folders")} onclick={() => openFolders(s)} />
           <GhostButton icon="material-symbols:sync-rounded" label={$t("servers.sync")} busy={synchro === s.id} disabled={synchro !== null}
                        onclick={() => sync(s)} />

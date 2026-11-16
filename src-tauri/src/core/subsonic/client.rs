@@ -97,7 +97,8 @@ const UNREACHABLE: &str = "serveur injoignable";
 pub fn is_unreachable(err: &str) -> bool {
     err.starts_with(UNREACHABLE)
         || err.starts_with("serveur : HTTP")
-        || ["injoignable", "téléchargement interrompu", "téléchargement figé"].iter().any(|m| err.contains(m))
+        || err.starts_with("Qobuz: HTTP")
+        || ["injoignable", "unreachable", "téléchargement interrompu", "téléchargement figé"].iter().any(|m| err.contains(m))
 }
 
 fn unwrap_response(json: Value) -> Result<Value, String> {

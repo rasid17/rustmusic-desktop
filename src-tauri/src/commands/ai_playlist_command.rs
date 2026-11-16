@@ -222,7 +222,7 @@ pub async fn detect_ai_agents() -> Result<Vec<AiAgentInfo>, String> {
     agents.push(AiAgentInfo {
         id: "custom".to_string(),
         name: "Custom CLI Agent".to_string(),
-        description: "Commande personnalisée (reçoit le prompt sur stdin)".to_string(),
+        description: "Custom command (receives prompt via stdin)".to_string(),
         available: true,
         binary_path: None,
         default_command: "claude -p".to_string(),
@@ -497,7 +497,7 @@ fn complete_reorder_indices(chosen_indices: Vec<usize>, total_count: usize) -> V
 fn parse_agent_output(raw: &str, catalog_len: usize, max_tracks: usize) -> Result<(Option<String>, Option<String>, Vec<usize>), String> {
     let trimmed = raw.trim();
     if trimmed.is_empty() {
-        return Err("L'agent IA a renvoyé une réponse vide.".into());
+        return Err("AI agent returned an empty response.".into());
     }
 
     // 1. Chercher un objet JSON `{ ... "tracks": [...] ... }`
@@ -538,7 +538,7 @@ fn parse_agent_output(raw: &str, catalog_len: usize, max_tracks: usize) -> Resul
     }
 
     Err(format!(
-        "Impossible d'extraire la liste des pistes depuis la réponse de l'agent : {}",
+        "Unable to extract track list from agent response: {}",
         trimmed.chars().take(240).collect::<String>()
     ))
 }
@@ -560,7 +560,7 @@ fn run_cli_agent_blocking(
 
         let mut child = cmd
             .spawn()
-            .map_err(|e| format!("Échec du lancement de {} : {e}", program.display()))?;
+            .map_err(|e| format!("Failed to start {}: {e}", program.display()))?;
 
         if pass_stdin {
             if let Some(mut stdin) = child.stdin.take() {
@@ -570,14 +570,14 @@ fn run_cli_agent_blocking(
 
         let output = child
             .wait_with_output()
-            .map_err(|e| format!("Erreur d'exécution de l'agent : {e}"))?;
+            .map_err(|e| format!("Agent execution error: {e}"))?;
 
         let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
         let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
 
         if !output.status.success() && stdout.trim().is_empty() {
             return Err(format!(
-                "L'agent {} a échoué (code {:?}) : {}",
+                "Agent {} failed (exit code {:?}): {}",
                 program.display(),
                 output.status.code(),
                 stderr.trim()
@@ -590,28 +590,28 @@ fn run_cli_agent_blocking(
     match agent_id {
         "claude" => {
             let bin = find_agent_binary("claude")
-                .ok_or_else(|| "Agent `claude` introuvable dans le PATH.".to_string())?;
+                .ok_or_else(|| "Agent `claude` not found in PATH.".to_string())?;
             execute_cmd(&bin, &["-p"], true)
         }
         "gemini" => {
             let bin = find_agent_binary("gemini")
-                .ok_or_else(|| "Agent `gemini` introuvable dans le PATH.".to_string())?;
+                .ok_or_else(|| "Agent `gemini` not found in PATH.".to_string())?;
             execute_cmd(&bin, &["-p", "Generate the requested JSON playlist from stdin."], true)
         }
         "agy" => {
             let bin = find_agent_binary("agy")
-                .ok_or_else(|| "Agent `agy` introuvable dans le PATH.".to_string())?;
+                .ok_or_else(|| "Agent `agy` not found in PATH.".to_string())?;
             execute_cmd(&bin, &["-p", full_prompt], false)
                 .or_else(|_| execute_cmd(&bin, &[full_prompt], false))
         }
         "codex" => {
             let bin = find_agent_binary("codex")
-                .ok_or_else(|| "Agent `codex` introuvable dans le PATH.".to_string())?;
+                .ok_or_else(|| "Agent `codex` not found in PATH.".to_string())?;
             execute_cmd(&bin, &["exec", full_prompt], false)
         }
         "ollama" => {
             let bin = find_agent_binary("ollama")
-                .ok_or_else(|| "Agent `ollama` introuvable dans le PATH.".to_string())?;
+                .ok_or_else(|| "Agent `ollama` not found in PATH.".to_string())?;
             let model = custom_command
                 .map(str::trim)
                 .filter(|s| !s.is_empty())
@@ -622,7 +622,7 @@ fn run_cli_agent_blocking(
             let cmd_str = custom_command
                 .map(str::trim)
                 .filter(|s| !s.is_empty())
-                .ok_or_else(|| "Veuillez saisir une commande pour l'agent personnalisé.".to_string())?;
+                .ok_or_else(|| "Please enter a command for the custom agent.".to_string())?;
 
             #[cfg(target_os = "windows")]
             let (shell, flag) = ("cmd", "/C");
@@ -638,7 +638,7 @@ fn run_cli_agent_blocking(
                 .stdout(Stdio::piped())
                 .stderr(Stdio::piped())
                 .spawn()
-                .map_err(|e| format!("Échec de la commande personnalisée : {e}"))?;
+                .map_err(|e| format!("Custom command failed to start: {e}"))?;
 
             if let Some(mut stdin) = child.stdin.take() {
                 let _ = stdin.write_all(full_prompt.as_bytes());
@@ -646,16 +646,16 @@ fn run_cli_agent_blocking(
 
             let output = child
                 .wait_with_output()
-                .map_err(|e| format!("Erreur d'exécution : {e}"))?;
+                .map_err(|e| format!("Execution error: {e}"))?;
 
             let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
             let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
             if !output.status.success() && stdout.trim().is_empty() {
-                return Err(format!("La commande a échoué : {}", stderr.trim()));
+                return Err(format!("Command failed: {}", stderr.trim()));
             }
             Ok(stdout)
         }
-        other => Err(format!("Agent IA inconnu : {other}")),
+        other => Err(format!("Unknown AI agent: {other}")),
     }
 }
 
@@ -666,7 +666,7 @@ pub async fn generate_ai_playlist(
 ) -> Result<AiPlaylistResult, String> {
     let prompt_trimmed = payload.prompt.trim().to_string();
     if prompt_trimmed.is_empty() {
-        return Err("Veuillez décrire la playlist souhaitée.".into());
+        return Err("Please describe the playlist you want.".into());
     }
 
     let max_tracks = payload.max_tracks.unwrap_or(25).clamp(5, 100);
@@ -697,10 +697,10 @@ pub async fn generate_ai_playlist(
     .bind(payload.library_id)
     .fetch_all(&state.pool)
     .await
-    .map_err(|e| format!("Erreur lecture bibliothèque : {e}"))?;
+    .map_err(|e| format!("Failed to read library: {e}"))?;
 
     if rows.is_empty() {
-        return Err("Aucune piste active dans cette bibliothèque.".into());
+        return Err("No active tracks found in this library.".into());
     }
 
     let catalog = select_catalog_candidates(rows, &prompt_trimmed, 550);
@@ -717,8 +717,8 @@ pub async fn generate_ai_playlist(
         }),
     )
     .await
-    .map_err(|_| "Délai d'attente dépassé (120s) lors de l'appel à l'agent IA.".to_string())?
-    .map_err(|e| format!("Erreur interne d'exécution : {e}"))??;
+    .map_err(|_| "Timed out (120s) while waiting for AI agent.".to_string())?
+    .map_err(|e| format!("Internal execution error: {e}"))??;
 
     let (ai_name, ai_desc, chosen_indices) =
         parse_agent_output(&raw_output, catalog.len(), max_tracks)?;
@@ -738,7 +738,7 @@ pub async fn generate_ai_playlist(
     let final_desc = ai_desc
         .map(|s| s.trim().to_string())
         .filter(|s| !s.is_empty())
-        .or_else(|| Some(format!("Générée par {} — {}", payload.agent_id, prompt_trimmed)));
+        .or_else(|| Some(format!("Generated by {} — {}", payload.agent_id, prompt_trimmed)));
 
     let color = payload.color.unwrap_or_else(|| "#8b5cf6".to_string());
     let icon = payload.icon.unwrap_or_else(|| "mynaui:sparkles".to_string());
@@ -757,7 +757,7 @@ pub async fn generate_ai_playlist(
         0,
     )
     .await
-    .map_err(|e| format!("Impossible de créer la playlist : {e}"))?;
+    .map_err(|e| format!("Failed to create playlist: {e}"))?;
 
     for (sort_idx, &cat_idx) in chosen_indices.iter().enumerate() {
         if let Some(track) = catalog.get(cat_idx) {
@@ -814,7 +814,7 @@ pub async fn extend_ai_playlist(
     .bind(payload.playlist_id)
     .fetch_all(&state.pool)
     .await
-    .map_err(|e| format!("Erreur lecture pistes playlist : {e}"))?;
+    .map_err(|e| format!("Failed to read playlist tracks: {e}"))?;
 
     // 2. Ensemble des IDs de pistes déjà dans la playlist
     let existing_track_ids: HashSet<String> =
@@ -846,7 +846,7 @@ pub async fn extend_ai_playlist(
     .bind(payload.library_id)
     .fetch_all(&state.pool)
     .await
-    .map_err(|e| format!("Erreur lecture bibliothèque : {e}"))?;
+    .map_err(|e| format!("Failed to read library: {e}"))?;
 
     let candidates: Vec<CandidateTrack> = all_candidates
         .into_iter()
@@ -855,7 +855,7 @@ pub async fn extend_ai_playlist(
 
     // 4. Si aucune piste disponible
     if candidates.is_empty() {
-        return Err("Aucune piste supplémentaire disponible dans les dossiers actifs.".into());
+        return Err("No additional tracks available in active folders.".into());
     }
 
     // 5. Construire la requête de semence (hint + top artistes / genres)
@@ -914,8 +914,8 @@ pub async fn extend_ai_playlist(
         }),
     )
     .await
-    .map_err(|_| "Délai d'attente dépassé (120s) lors de l'appel à l'agent IA.".to_string())?
-    .map_err(|e| format!("Erreur interne d'exécution : {e}"))??;
+    .map_err(|_| "Timed out (120s) while waiting for AI agent.".to_string())?
+    .map_err(|e| format!("Internal execution error: {e}"))??;
 
     let (_, _, chosen_indices) =
         parse_agent_output(&raw_output, catalog.len(), add_count)?;
@@ -941,8 +941,8 @@ pub async fn extend_ai_playlist(
     let _ = PlaylistRepository::recalculate_stats(&state.pool, payload.playlist_id).await;
     let playlist = PlaylistRepository::find_by_id(&state.pool, payload.playlist_id)
         .await
-        .map_err(|e| format!("Erreur récupération playlist : {e}"))?
-        .ok_or_else(|| "Playlist introuvable.".to_string())?;
+        .map_err(|e| format!("Failed to fetch playlist: {e}"))?
+        .ok_or_else(|| "Playlist not found.".to_string())?;
 
     Ok(AiPlaylistResult {
         playlist,
@@ -978,11 +978,11 @@ pub async fn reorder_ai_playlist(
     .bind(payload.playlist_id)
     .fetch_all(&state.pool)
     .await
-    .map_err(|e| format!("Erreur lecture pistes playlist : {e}"))?;
+    .map_err(|e| format!("Failed to read playlist tracks: {e}"))?;
 
     // 2. Vérifier au moins 3 pistes
     if items.len() < 3 {
-        return Err("La playlist doit contenir au moins 3 pistes pour être réordonnée.".into());
+        return Err("Playlist must contain at least 3 tracks to be reordered.".into());
     }
 
     // 3. Construire le prompt de réordonnancement
@@ -999,8 +999,8 @@ pub async fn reorder_ai_playlist(
         }),
     )
     .await
-    .map_err(|_| "Délai d'attente dépassé (120s) lors de l'appel à l'agent IA.".to_string())?
-    .map_err(|e| format!("Erreur interne d'exécution : {e}"))??;
+    .map_err(|_| "Timed out (120s) while waiting for AI agent.".to_string())?
+    .map_err(|e| format!("Internal execution error: {e}"))??;
 
     let (_, _, chosen_indices) =
         parse_agent_output(&raw_output, items.len(), items.len())?;
@@ -1013,7 +1013,7 @@ pub async fn reorder_ai_playlist(
         .pool
         .begin()
         .await
-        .map_err(|e| format!("Erreur début de transaction : {e}"))?;
+        .map_err(|e| format!("Failed to start transaction: {e}"))?;
 
     for (new_pos, &item_idx) in complete_indices.iter().enumerate() {
         if let Some(item) = items.get(item_idx) {
@@ -1022,20 +1022,20 @@ pub async fn reorder_ai_playlist(
                 .bind(item.playlist_item_id)
                 .execute(&mut *tx)
                 .await
-                .map_err(|e| format!("Erreur mise à jour position piste : {e}"))?;
+                .map_err(|e| format!("Failed to update track position: {e}"))?;
         }
     }
 
     tx.commit()
         .await
-        .map_err(|e| format!("Erreur validation transaction : {e}"))?;
+        .map_err(|e| format!("Failed to commit transaction: {e}"))?;
 
     // 7. Recalculer les stats et retourner le résultat
     let _ = PlaylistRepository::recalculate_stats(&state.pool, payload.playlist_id).await;
     let playlist = PlaylistRepository::find_by_id(&state.pool, payload.playlist_id)
         .await
-        .map_err(|e| format!("Erreur récupération playlist : {e}"))?
-        .ok_or_else(|| "Playlist introuvable.".to_string())?;
+        .map_err(|e| format!("Failed to fetch playlist: {e}"))?
+        .ok_or_else(|| "Playlist not found.".to_string())?;
 
     Ok(AiPlaylistResult {
         playlist,

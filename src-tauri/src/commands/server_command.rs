@@ -288,10 +288,63 @@ pub async fn offline_remove(app: tauri::AppHandle, state: State<'_, AppState>, p
 pub async fn server_set_transcode(state: State<'_, AppState>, server_id: i64, format: Option<String>, bitrate: Option<i64>) -> Result<(), String> {
     let transcode = match format.as_deref() {
         None => None,
+        Some("flac") => Some(("flac", bitrate.unwrap_or(96).clamp(44, 192))),
         Some(f @ ("mp3" | "opus")) => Some((f, bitrate.unwrap_or(192).clamp(32, 320))),
         Some(other) => return Err(format!("format inconnu : {other}")),
     };
     ServerRepository::set_transcode(&state.pool, server_id, transcode).await.map_err(db)
+}
+
+/// Recherche d'albums et de titres dans le catalogue global Qobuz.
+#[tauri::command]
+pub async fn qobuz_search(
+    state: State<'_, AppState>,
+    server_id: i64,
+    query: String,
+) -> Result<crate::core::qobuz::catalog::QobuzSearchResults, String> {
+    match saved_server(&state, server_id).await? {
+        Backend::Qobuz(q) => q.search_catalog(&query, 24).await,
+        _ => Err("This server is not a Qobuz account".into()),
+    }
+}
+
+/// Importe un album Qobuz complet dans la bibliothèque locale du serveur (et l'ajoute aux favoris Qobuz si `favorite` vaut `true`).
+#[tauri::command]
+pub async fn qobuz_import_album(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    server_id: i64,
+    album_id: String,
+    favorite: bool,
+) -> Result<Vec<crate::mapper::library::track::track_list_item_view::TrackListView>, String> {
+    let Backend::Qobuz(q) = saved_server(&state, server_id).await? else {
+        return Err("This server is not a Qobuz account".into());
+    };
+    if favorite {
+        let _ = q.set_favorite_album(&album_id, true).await;
+    }
+    let songs = q.album_songs(&album_id, false).await?;
+    sync_service::import_songs_on_demand(&app, &state.pool, server_id, &songs).await
+}
+
+/// Importe un morceau Qobuz dans la bibliothèque locale du serveur (et l'ajoute aux favoris Qobuz si `favorite` vaut `true`).
+#[tauri::command]
+pub async fn qobuz_import_track(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    server_id: i64,
+    track_id: String,
+    favorite: bool,
+) -> Result<crate::mapper::library::track::track_list_item_view::TrackListView, String> {
+    let Backend::Qobuz(q) = saved_server(&state, server_id).await? else {
+        return Err("This server is not a Qobuz account".into());
+    };
+    if favorite {
+        let _ = q.set_favorite(&track_id, true).await;
+    }
+    let song = q.track_song(&track_id, favorite).await?;
+    let mut views = sync_service::import_songs_on_demand(&app, &state.pool, server_id, &[song]).await?;
+    views.pop().ok_or_else(|| "Unable to import this Qobuz track".into())
 }
 
 /// Épingle ou non les playlists du serveur dans la barre latérale.

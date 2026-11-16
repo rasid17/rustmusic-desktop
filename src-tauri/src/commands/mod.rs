@@ -31,3 +31,4 @@ pub mod mini_window;
 pub mod podcast_command;
 pub mod server_command;
 pub mod ai_playlist_command;
+pub mod mobile_remote_command;

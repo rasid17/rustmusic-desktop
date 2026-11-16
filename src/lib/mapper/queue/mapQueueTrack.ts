@@ -29,7 +29,7 @@ export function toQueueTrack(source: SourceDeFile, position = 0): QueueTrack {
     queueId: crypto.randomUUID(),
     profilId: profil.profilSelected?.id ?? 1,
     path: source.path as string,
-    title: source.title ?? source.name ?? source.filename ?? "Inconnu",
+    title: source.title ?? source.name ?? source.filename ?? "Unknown",
     artist: source.artist ?? source.artist_name ?? undefined,
     album: source.album ?? undefined,
     genre: source.genre ?? undefined,

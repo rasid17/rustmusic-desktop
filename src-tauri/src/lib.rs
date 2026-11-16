@@ -22,6 +22,10 @@ use crate::commands::smart_playlist_command::{
 use crate::commands::ai_playlist_command::{
     detect_ai_agents, extend_ai_playlist, generate_ai_playlist, reorder_ai_playlist,
 };
+use crate::commands::mobile_remote_command::{
+    mobile_remote_push_state, mobile_remote_start, mobile_remote_status, mobile_remote_stop,
+    mobile_remote_update_settings,
+};
 use crate::commands::playlist_view_command::{get_playlist_tracks_view, get_tracks_view_by_paths};
 use crate::commands::export_command::{export_settings_and_playlists, import_settings_and_playlists, preview_import};
 use crate::commands::pin_command::{get_library_pins, pin_album, pin_artist, unpin_album, unpin_artist};
@@ -38,7 +42,7 @@ use crate::commands::lyrics_command::{get_lyrics, refresh_lyrics, save_lyrics};
 use crate::commands::dlna_command::{dlna_get_settings, dlna_status, dlna_start, dlna_stop, dlna_update_settings};
 use crate::commands::platform_command::{get_platform_features, set_autostart_portal};
 use crate::commands::server_command::{
-    get_servers, servers_check, server_sync, server_add, server_add_libraries, server_browse, server_discover, server_folders, server_probe, server_remove, server_rename, server_set_enabled, server_set_pin_playlists, server_set_transcode, offline_list, offline_add, offline_remove,
+    get_servers, servers_check, server_sync, server_add, server_add_libraries, server_browse, server_discover, server_folders, server_probe, server_remove, server_rename, server_set_enabled, server_set_pin_playlists, server_set_transcode, offline_list, offline_add, offline_remove, qobuz_search, qobuz_import_album, qobuz_import_track,
 };
 use crate::commands::podcast_command::{
     get_podcast, get_podcast_episode, get_podcast_episodes, get_podcasts, podcast_refresh, podcast_search, podcast_set_all_played,
@@ -739,6 +743,17 @@ pub async fn run() {
                 crate::commands::dlna_command::auto_start_if_enabled(&dlna_state).await;
             });
 
+            // ─── MOBILE REMOTE SERVER ──────────────────────────
+            let mobile_remote_state = app.state::<AppState>().inner().clone();
+            let mobile_remote_app = app.handle().clone();
+            tauri::async_runtime::spawn(async move {
+                crate::commands::mobile_remote_command::auto_start_if_enabled(
+                    &mobile_remote_state,
+                    mobile_remote_app,
+                )
+                .await;
+            });
+
             // ─── LECTEUR RÉSEAU ────────────────────────────────
             // Désactivé par défaut ; activé, le lecteur mémorisé est relu depuis sa description.
             let np_state = app.state::<AppState>().inner().clone();
@@ -1000,6 +1015,9 @@ pub async fn run() {
             offline_list,
             offline_add,
             offline_remove,
+            qobuz_search,
+            qobuz_import_album,
+            qobuz_import_track,
             server_remove,
             get_podcast_latest,
             podcast_download,
@@ -1064,6 +1082,11 @@ pub async fn run() {
             generate_ai_playlist,
             extend_ai_playlist,
             reorder_ai_playlist,
+            mobile_remote_status,
+            mobile_remote_start,
+            mobile_remote_stop,
+            mobile_remote_update_settings,
+            mobile_remote_push_state,
         ])
         .build(tauri::generate_context!())
         .expect("error while running tauri application")

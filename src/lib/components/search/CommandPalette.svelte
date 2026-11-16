@@ -26,6 +26,8 @@
   import type { LibraryDir } from "#lib/types/db/library/LibraryDir";
   import type { Playlist } from "#lib/types/db/playlist/Playlist";
   import AiPlaylistPopin from "#lib/components/playlist/popin/AiPlaylistPopin.svelte";
+  import QobuzCatalogPopin from "#lib/components/mediaServer/QobuzCatalogPopin.svelte";
+  import { serverStore } from "#lib/stores/mediaServer/mediaServer.store";
   import CoverImg from "#lib/components/ui/image/CoverImg.svelte";
   import CloudMark from "#lib/components/ui/status/CloudMark.svelte";
   import VersionMarks from "#lib/components/ui/status/VersionMarks.svelte";
@@ -158,12 +160,12 @@
       importsTermines.update((n) => n + 1);
       toasts.push({
         type: "success",
-        title: "Folder Tersinkronisasi",
-        message: `${dir.name}: ${!dir.is_active ? "Diaktifkan" : "Dinonaktifkan"}`,
+        title: "Synced Folders",
+        message: `${dir.name}: ${!dir.is_active ? "Enabled" : "Disabled"}`,
       });
       await loadContextData();
     } catch (e) {
-      toasts.push({ type: "error", title: "Gagal Mengubah Folder", message: String(e) });
+      toasts.push({ type: "error", title: "Failed to Update Folder", message: String(e) });
     }
   }
 
@@ -174,12 +176,12 @@
       await applyFolderProfile(libId, profile.activeDirIds);
       toasts.push({
         type: "success",
-        title: "Mode Dengar",
-        message: `Profil "${profile.name}" diterapkan`,
+        title: "Listening Mode",
+        message: `Profile "${profile.name}" applied`,
       });
       await loadContextData();
     } catch (e) {
-      toasts.push({ type: "error", title: "Gagal Menerapkan Profil", message: String(e) });
+      toasts.push({ type: "error", title: "Failed to Apply Profile", message: String(e) });
     }
   }
 
@@ -190,12 +192,12 @@
       await applyFolderProfile(libId, dirs.map((d) => d.id));
       toasts.push({
         type: "success",
-        title: "Mode Dengar",
-        message: "Semua folder diaktifkan",
+        title: "Listening Mode",
+        message: "All folders enabled",
       });
       await loadContextData();
     } catch (e) {
-      toasts.push({ type: "error", title: "Gagal Mengaktifkan Folder", message: String(e) });
+      toasts.push({ type: "error", title: "Failed to Enable Folders", message: String(e) });
     }
   }
 
@@ -205,13 +207,13 @@
       toasts.push({
         type: "success",
         title: "Audio Output",
-        message: `Perangkat diubah ke: ${deviceName}`,
+        message: `Output device switched to: ${deviceName}`,
       });
     } catch (e) {
       toasts.push({
         type: "error",
         title: "Audio Output",
-        message: `Gagal mengubah perangkat: ${String(e)}`,
+        message: `Failed to switch output device: ${String(e)}`,
       });
     }
   }
@@ -225,8 +227,8 @@
         kind: "command",
         id: "ai_new_playlist",
         category: "AI Playlist",
-        title: "AI Playlist Generator: Buat Playlist Baru...",
-        subtitle: "Hasilkan playlist otomatis berbasis prompt cerdas",
+        title: "AI Playlist Generator: Create New Playlist...",
+        subtitle: "Generate an automatic playlist from a smart prompt",
         icon: "mynaui:sparkles",
         badge: "AI",
         badgeVariant: "purple",
@@ -243,80 +245,100 @@
       {
         kind: "command",
         id: "playback_toggle_play",
-        category: "Pemutaran",
+        category: "Playback",
         title: "Play / Pause",
-        subtitle: "Putar atau jeda lagu saat ini",
+        subtitle: "Play or pause the current track",
         icon: "lucide:play",
         action: () => playerService.handleTogglePlay(),
       },
       {
         kind: "command",
         id: "playback_next",
-        category: "Pemutaran",
+        category: "Playback",
         title: "Next Track",
-        subtitle: "Lompat ke lagu berikutnya",
+        subtitle: "Skip to the next track",
         icon: "lucide:skip-forward",
         action: () => playerService.nextTrack(),
       },
       {
         kind: "command",
         id: "playback_prev",
-        category: "Pemutaran",
+        category: "Playback",
         title: "Previous Track",
-        subtitle: "Kembali ke lagu sebelumnya",
+        subtitle: "Return to the previous track",
         icon: "lucide:skip-back",
         action: () => playerService.prevTrack(),
       },
       {
         kind: "command",
         id: "playback_shuffle",
-        category: "Pemutaran",
+        category: "Playback",
         title: "Smart Shuffle: Toggle / Reshuffle Queue",
-        subtitle: $queueState.isShuffled ? "Acak ulang antrean saat ini" : "Aktifkan putar acak cerdas",
+        subtitle: $queueState.isShuffled ? "Reshuffle the current queue" : "Enable fair smart shuffle",
         icon: "lucide:shuffle",
         action: async () => {
           await queueState.toggleShuffle();
           toasts.push({
             type: "info",
             title: "Smart Shuffle",
-            message: !$queueState.isShuffled ? "Smart Shuffle diaktifkan" : "Smart Shuffle dinonaktifkan",
+            message: !$queueState.isShuffled ? "Smart Shuffle enabled" : "Smart Shuffle disabled",
           });
         },
       },
       {
         kind: "command",
         id: "playback_clear_queue",
-        category: "Pemutaran",
+        category: "Playback",
         title: "Clear Queue",
-        subtitle: "Hapus seluruh antrean pemutaran",
+        subtitle: "Clear the entire playback queue",
         icon: "lucide:trash-2",
         action: async () => {
           await queueState.clear();
           toasts.push({
             type: "info",
-            title: "Antrean",
-            message: "Antrean dibersihkan",
+            title: "Queue",
+            message: "Playback queue cleared",
           });
         },
       },
       {
         kind: "command",
         id: "playback_mini_player",
-        category: "Pemutaran",
+        category: "Playback",
         title: "Toggle Mini Player (Picture-in-Picture)",
-        subtitle: "Buka atau tutup jendela pemutar mini",
+        subtitle: "Open or close the mini player window",
         icon: "lucide:picture-in-picture-2",
         action: () => {
           void toggleMiniPlayer();
         },
       },
+      ...($serverStore.servers
+        .filter((s) => s.kind === "qobuz" && s.enabled)
+        .map((s) => ({
+          kind: "command" as const,
+          id: `qobuz_catalog_${s.id}`,
+          category: "Qobuz Hi-Res",
+          title: `Search Qobuz Catalog (${s.name})`,
+          subtitle: "Search & stream Qobuz tracks/albums up to 24-bit / 192 kHz Bit-Perfect",
+          icon: "material-symbols:high-quality-outline-rounded",
+          badge: "Hi-Res FLAC",
+          badgeVariant: "purple" as const,
+          action: () => {
+            popinStore.open(
+              `Qobuz Hi-Res Catalog — ${s.name}`,
+              QobuzCatalogPopin,
+              { server: s },
+              { size: "lg", icon: "material-symbols:high-quality-outline-rounded" },
+            );
+          },
+        }))),
       // Navigation & Appearance
       {
         kind: "command",
         id: "nav_theme",
-        category: "Tampilan & Navigasi",
+        category: "Appearance & Navigation",
         title: "Toggle Theme (Light / Dark)",
-        subtitle: "Beralih antara tema gelap dan terang",
+        subtitle: "Switch between dark and light mode",
         icon: "lucide:sun-moon",
         action: async () => {
           const isDark = document.documentElement.classList.contains("dark");
@@ -324,17 +346,17 @@
           await settingsStore.set("theme", nextTheme);
           toasts.push({
             type: "info",
-            title: "Tema",
-            message: isDark ? "Mode Terang diaktifkan" : "Mode Gelap diaktifkan",
+            title: "Theme",
+            message: isDark ? "Light mode enabled" : "Dark mode enabled",
           });
         },
       },
       {
         kind: "command",
         id: "nav_playlists",
-        category: "Tampilan & Navigasi",
+        category: "Appearance & Navigation",
         title: "Go to Playlists",
-        subtitle: "Buka daftar semua playlist",
+        subtitle: "Open all playlists",
         icon: "lucide:list-music",
         action: () => {
           goto("/playlists");
@@ -343,9 +365,9 @@
       {
         kind: "command",
         id: "nav_favorites",
-        category: "Tampilan & Navigasi",
+        category: "Appearance & Navigation",
         title: "Go to Favorites",
-        subtitle: "Buka daftar lagu yang disukai",
+        subtitle: "Open your liked tracks",
         icon: "lucide:heart",
         action: () => {
           goto("/playlist/liked");
@@ -354,9 +376,9 @@
       {
         kind: "command",
         id: "nav_settings",
-        category: "Tampilan & Navigasi",
+        category: "Appearance & Navigation",
         title: "Go to Settings",
-        subtitle: "Buka pengaturan umum aplikasi",
+        subtitle: "Open application settings",
         icon: "lucide:settings",
         action: () => {
           goto("/settings/general");
@@ -364,10 +386,23 @@
       },
       {
         kind: "command",
+        id: "nav_mobile_remote",
+        category: "Appearance & Navigation",
+        title: "Mobile Remote: Phone & Tablet QR Code / Settings",
+        subtitle: "Control playback and browse library from your phone over Wi-Fi",
+        icon: "lucide:smartphone",
+        badge: "LAN",
+        badgeVariant: "green",
+        action: () => {
+          goto("/settings/remote");
+        },
+      },
+      {
+        kind: "command",
         id: "nav_podcasts",
-        category: "Tampilan & Navigasi",
+        category: "Appearance & Navigation",
         title: "Go to Podcasts",
-        subtitle: "Buka daftar saluran dan episode podcast",
+        subtitle: "Open podcast channels and episodes",
         icon: "lucide:podcast",
         action: () => {
           goto("/podcasts");
@@ -381,9 +416,9 @@
         list.push({
           kind: "command",
           id: "folder_profile_all",
-          category: "Mode Dengar (Folder)",
-          title: "Folder Profile: Aktifkan Semua Folder",
-          subtitle: `Aktifkan semua ${dirs.length} folder tersinkronisasi`,
+          category: "Listening Mode (Folders)",
+          title: "Folder Profile: Enable All Folders",
+          subtitle: `Enable all ${dirs.length} synced folders`,
           icon: "lucide:folder-check",
           action: () => handleActivateAllDirs(),
         });
@@ -393,9 +428,9 @@
         list.push({
           kind: "command",
           id: `folder_profile_${prof.id}`,
-          category: "Mode Dengar (Folder)",
+          category: "Listening Mode (Folders)",
           title: `Folder Profile: ${prof.name}`,
-          subtitle: `${prof.activeDirIds.length} folder aktif`,
+          subtitle: `${prof.activeDirIds.length} active folders`,
           icon: "lucide:folder-heart",
           action: () => handleApplyProfile(prof),
         });
@@ -406,11 +441,11 @@
         list.push({
           kind: "command",
           id: `dir_${dir.id}`,
-          category: "Folder Tersinkronisasi",
-          title: `Folder: ${dir.is_active ? "Nonaktifkan" : "Aktifkan"} ${dir.name}`,
+          category: "Synced Folders",
+          title: `Folder: ${dir.is_active ? "Disable" : "Enable"} ${dir.name}`,
           subtitle: dir.path,
           icon: dir.is_active ? "lucide:folder-minus" : "lucide:folder-plus",
-          badge: dir.is_active ? "Aktif" : "Nonaktif",
+          badge: dir.is_active ? "Active" : "Inactive",
           badgeVariant: dir.is_active ? "green" : "gray",
           action: () => handleToggleDir(dir),
         });
@@ -419,9 +454,9 @@
       list.push({
         kind: "command",
         id: "dir_manage",
-        category: "Folder Tersinkronisasi",
-        title: "Kelola Synced Folders...",
-        subtitle: "Buka pengaturan folder perpustakaan",
+        category: "Synced Folders",
+        title: "Manage Synced Folders...",
+        subtitle: "Open library folder settings",
         icon: "lucide:folder-cog",
         action: () => {
           goto(`/library/${libId}/folders`);
@@ -436,7 +471,7 @@
         id: `device_${device}`,
         category: "Audio Output",
         title: `Audio Output: ${device}`,
-        subtitle: "Alihkan perangkat keluaran audio",
+        subtitle: "Switch audio output device",
         icon: "lucide:speaker",
         action: () => handleSetDevice(device),
       });
@@ -485,7 +520,7 @@
         id: "ai_custom_generate",
         category: "AI Playlist",
         title: `Generate AI Playlist: "${aiPrompt}"`,
-        subtitle: "Buat playlist otomatis dengan prompt cerdas ini",
+        subtitle: "Create an automatic playlist with this smart prompt",
         icon: "mynaui:sparkles",
         badge: "AI",
         badgeVariant: "purple",
@@ -507,7 +542,7 @@
         list.push({
           kind: "playlist",
           id: `pl_${pl.id}`,
-          category: "Playlist",
+          category: "Playlists",
           playlist: pl,
         });
       }
@@ -517,7 +552,7 @@
         list.push({
           kind: "track",
           id: `track_${hit.id}`,
-          category: "Lagu",
+          category: "Tracks",
           hit,
         });
       }
@@ -527,7 +562,7 @@
         list.push({
           kind: "album",
           id: `album_${hit.id}`,
-          category: "Album",
+          category: "Albums",
           hit,
         });
       }
@@ -537,7 +572,7 @@
         list.push({
           kind: "artist",
           id: `artist_${hit.id}`,
-          category: "Artis",
+          category: "Artists",
           hit,
         });
       }
@@ -667,7 +702,7 @@
       executeEntry({
         kind: r.result_type as "album" | "artist",
         id: r.id,
-        category: r.result_type === "album" ? "Album" : "Artis",
+        category: r.result_type === "album" ? "Albums" : "Artists",
         hit: { ...r, versions: hit.versions },
       });
     }
@@ -696,7 +731,7 @@
         // Shift+Enter: Play Next on a track
         if (item.kind === "track" && item.hit.path) {
           void queueState.addTrack(toQueueTrack(item.hit));
-          toasts.push({ type: "success", title: "Ditambahkan diputar berikutnya", message: item.hit.title });
+          toasts.push({ type: "success", title: "Added to play next", message: item.hit.title });
           close();
         } else {
           executeEntry(item);
@@ -708,7 +743,7 @@
         // Ctrl+Enter / Meta+Enter: Enqueue on a track, keeps palette open
         if (item.kind === "track" && item.hit.path) {
           void queueState.enqueue(toQueueTrack(item.hit));
-          toasts.push({ type: "success", title: "Ditambahkan ke antrean", message: item.hit.title });
+          toasts.push({ type: "success", title: "Added to queue", message: item.hit.title });
         } else {
           executeEntry(item);
         }
@@ -776,7 +811,7 @@
           bind:value={query}
           oninput={handleInput}
           onkeydown={handleKeydown}
-          placeholder="Ketik perintah ('>') atau cari lagu, album, artis, playlist..."
+          placeholder="Type a command ('>') or search tracks, albums, artists, playlists..."
           class="flex-1 bg-transparent border-none outline-none text-sm text-neutral-900 dark:text-neutral-100
                  placeholder:text-neutral-400 dark:placeholder:text-neutral-500"
           autocomplete="off"
@@ -789,7 +824,7 @@
             onclick={() => { query = ""; handleInput(); }}
             class="p-1 rounded-md text-neutral-400 hover:text-neutral-600 dark:hover:text-neutral-200
                    hover:bg-neutral-200/60 dark:hover:bg-neutral-800 transition-colors"
-            title="Hapus pencarian"
+            title="Clear search"
           >
             <Icon icon="lucide:x" class="w-4 h-4" />
           </button>
@@ -814,19 +849,19 @@
           <div class="flex flex-col items-center justify-center py-12 px-4 text-center">
             {#if isSearching}
               <Icon icon="lucide:loader-2" class="w-8 h-8 animate-spin text-emerald-500 mb-2" />
-              <p class="text-sm text-neutral-500 dark:text-neutral-400">Mencari di perpustakaan...</p>
+              <p class="text-sm text-neutral-500 dark:text-neutral-400">Searching library...</p>
             {:else if query.trim().length >= 2}
               <Icon icon="lucide:search-x" class="w-8 h-8 text-neutral-400 mb-2" />
               <p class="text-sm font-medium text-neutral-700 dark:text-neutral-300">
-                Tidak ada hasil untuk "{query}"
+                No results for "{query}"
               </p>
               <p class="text-xs text-neutral-400 dark:text-neutral-500 mt-1">
-                Ketik <span class="font-mono bg-neutral-100 dark:bg-neutral-800 px-1 py-0.5 rounded">&gt;</span> untuk melihat semua perintah cepat
+                Type <span class="font-mono bg-neutral-100 dark:bg-neutral-800 px-1 py-0.5 rounded">&gt;</span> to view all quick commands
               </p>
             {:else}
               <Icon icon="lucide:command" class="w-8 h-8 text-neutral-400 mb-2" />
               <p class="text-sm font-medium text-neutral-700 dark:text-neutral-300">
-                Tidak ada tindakan atau perintah yang cocok
+                No matching actions or commands
               </p>
             {/if}
           </div>
@@ -929,7 +964,7 @@
                   </p>
                 {:else if item.kind === "playlist"}
                   <p class="text-xs text-neutral-500 dark:text-neutral-400 truncate">
-                    {item.playlist.track_count ?? 0} lagu
+                    {item.playlist.track_count ?? 0} tracks
                   </p>
                 {/if}
               </div>
@@ -942,14 +977,14 @@
                 >
                   <button
                     type="button"
-                    title="Putar Berikutnya (Shift+Enter)"
+                    title="Play Next (Shift+Enter)"
                     onclick={(e) => {
                       e.stopPropagation();
                       if (item.hit.path) {
                         void queueState.addTrack(toQueueTrack(item.hit));
                         toasts.push({
                           type: "success",
-                          title: "Ditambahkan diputar berikutnya",
+                          title: "Added to play next",
                           message: item.hit.title,
                         });
                         close();
@@ -961,14 +996,14 @@
                   </button>
                   <button
                     type="button"
-                    title="Tambahkan ke antrean (Ctrl+Enter)"
+                    title="Add to Queue (Ctrl+Enter)"
                     onclick={(e) => {
                       e.stopPropagation();
                       if (item.hit.path) {
                         void queueState.enqueue(toQueueTrack(item.hit));
                         toasts.push({
                           type: "success",
-                          title: "Ditambahkan ke antrean",
+                          title: "Added to queue",
                           message: item.hit.title,
                         });
                       }
@@ -1012,23 +1047,23 @@
       >
         <div class="flex items-center gap-3 flex-wrap">
           <span class="inline-flex items-center gap-1">
-            <kbd class="px-1.5 py-0.5 rounded bg-neutral-200 dark:bg-neutral-800 font-mono text-[10px]">↑↓</kbd> Navigasi
+            <kbd class="px-1.5 py-0.5 rounded bg-neutral-200 dark:bg-neutral-800 font-mono text-[10px]">↑↓</kbd> Navigate
           </span>
           <span class="inline-flex items-center gap-1">
-            <kbd class="px-1.5 py-0.5 rounded bg-neutral-200 dark:bg-neutral-800 font-mono text-[10px]">↵</kbd> Putar / Jalankan
+            <kbd class="px-1.5 py-0.5 rounded bg-neutral-200 dark:bg-neutral-800 font-mono text-[10px]">↵</kbd> Play / Run
           </span>
           <span class="inline-flex items-center gap-1">
-            <kbd class="px-1.5 py-0.5 rounded bg-neutral-200 dark:bg-neutral-800 font-mono text-[10px]">⇧↵</kbd> Putar Berikutnya
+            <kbd class="px-1.5 py-0.5 rounded bg-neutral-200 dark:bg-neutral-800 font-mono text-[10px]">⇧↵</kbd> Play Next
           </span>
           <span class="inline-flex items-center gap-1">
-            <kbd class="px-1.5 py-0.5 rounded bg-neutral-200 dark:bg-neutral-800 font-mono text-[10px]">⌃↵</kbd> Antrekan
+            <kbd class="px-1.5 py-0.5 rounded bg-neutral-200 dark:bg-neutral-800 font-mono text-[10px]">⌃↵</kbd> Enqueue
           </span>
           <span class="inline-flex items-center gap-1">
-            <kbd class="px-1.5 py-0.5 rounded bg-neutral-200 dark:bg-neutral-800 font-mono text-[10px]">&gt;</kbd> Perintah Cepat
+            <kbd class="px-1.5 py-0.5 rounded bg-neutral-200 dark:bg-neutral-800 font-mono text-[10px]">&gt;</kbd> Quick Commands
           </span>
         </div>
         <span class="inline-flex items-center gap-1 shrink-0">
-          <kbd class="px-1.5 py-0.5 rounded bg-neutral-200 dark:bg-neutral-800 font-mono text-[10px]">Esc</kbd> Tutup
+          <kbd class="px-1.5 py-0.5 rounded bg-neutral-200 dark:bg-neutral-800 font-mono text-[10px]">Esc</kbd> Close
         </span>
       </div>
     </div>

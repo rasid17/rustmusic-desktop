@@ -183,6 +183,11 @@ pub mod jellyfin {
     pub mod catalog;
     pub mod client;
 }
+/// Streaming Qobuz Hi-Res : favoris, achats, playlists et catalogue global.
+pub mod qobuz {
+    pub mod catalog;
+    pub mod client;
+}
 pub mod remote;
 /// Serveurs DLNA du réseau (UPnP ContentDirectory) comme bibliothèques distantes.
 pub mod dlna_client {
@@ -198,3 +203,4 @@ pub mod subsonic {
 }
 pub mod smart_playlist;
 pub mod cue;
+pub mod mobile_remote;

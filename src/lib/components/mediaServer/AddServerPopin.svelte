@@ -17,6 +17,7 @@
   let kind = $state<ServerKind>("subsonic");
   const jellyfin = $derived(kind === "jellyfin");
   const dlna = $derived(kind === "dlna");
+  const qobuz = $derived(kind === "qobuz");
   let url = $state("");
   let username = $state("");
   let password = $state("");
@@ -53,7 +54,7 @@
 
   const credentials = (): ServerCredentials => ({
     kind,
-    url: url.trim(),
+    url: qobuz ? "https://www.qobuz.com/api.json/0.2" : url.trim(),
     username: username.trim(),
     password: avecCle ? null : password,
     apiKey: avecCle ? apiKey.trim() : null,
@@ -61,8 +62,16 @@
 
   async function connect() {
     erreur = null;
-    const missing = dlna ? false : avecCle ? !apiKey.trim() || (jellyfin && !username.trim()) : !username.trim() || (!jellyfin && !password);
-    if (!url.trim() || missing) {
+    const missing = dlna
+      ? false
+      : qobuz
+        ? avecCle
+          ? !apiKey.trim()
+          : !username.trim() || !password
+        : avecCle
+          ? !apiKey.trim() || (jellyfin && !username.trim())
+          : !username.trim() || (!jellyfin && !password);
+    if ((!qobuz && !url.trim()) || missing) {
       erreur = $t("servers.fill_fields");
       return;
     }
@@ -112,9 +121,19 @@
 
 <div class="space-y-5">
   {#if !probe}
-    <div class="grid grid-cols-3 gap-2.5 max-sm:grid-cols-1" role="radiogroup" aria-label={$t("servers.kind")}>
-      {#each [["subsonic", "servers.kind_subsonic", "servers.intro"], ["jellyfin", "Jellyfin", "servers.intro_jellyfin"], ["dlna", "DLNA", "servers.intro_dlna"]] as [value, title, desc] (value)}
-        <ChoiceTile title={value === "subsonic" ? $t(title) : title} desc={$t(desc)} selected={kind === value} onclick={() => choose(value as ServerKind)} />
+    <div class="grid grid-cols-2 sm:grid-cols-4 gap-2.5" role="radiogroup" aria-label={$t("servers.kind")}>
+      {#each [
+        ["subsonic", "servers.kind_subsonic", "servers.intro", true],
+        ["jellyfin", "Jellyfin", "servers.intro_jellyfin", true],
+        ["dlna", "DLNA", "servers.intro_dlna", true],
+        ["qobuz", "Qobuz", "Hi-Res 24-bit / 192 kHz · Bit-Perfect FLAC", false],
+      ] as [value, title, desc, translated] (value)}
+        <ChoiceTile
+          title={value === "subsonic" ? $t(title as string) : (title as string)}
+          desc={translated ? $t(desc as string) : (desc as string)}
+          selected={kind === value}
+          onclick={() => choose(value as ServerKind)}
+        />
       {/each}
     </div>
 
@@ -147,9 +166,21 @@
       </div>
     {/if}
 
-    <FormField label={$t("servers.address")} for="srv_url" required={!dlna}>
-      <FormInput id="srv_url" bind:value={url} mono placeholder={dlna ? "http://nas.local:8200" : jellyfin ? "http://nas.local:8096" : "https://music.example.com"} disabled={busy} oninput={() => (erreur = null)} onenter={connect} />
-    </FormField>
+    {#if qobuz}
+      <div class="flex items-start gap-3 px-4 py-3 rounded-xl border border-amber-500/30 bg-amber-500/8 text-xs leading-relaxed text-(--rg-tx2)">
+        <Icon icon="material-symbols:high-quality-outline-rounded" width="20" class="shrink-0 mt-0.5 text-amber-500" />
+        <div>
+          <p class="font-semibold text-(--rg-tx)">Qobuz Bit-Perfect Streaming (up to 24-bit / 192 kHz)</p>
+          <p class="mt-0.5 text-(--rg-mu)">
+            Uncompressed FLAC streams are decoded directly by Symphonia and sent to your exclusive audio output (ALSA / WASAPI / CoreAudio) without resampling.
+          </p>
+        </div>
+      </div>
+    {:else}
+      <FormField label={$t("servers.address")} for="srv_url" required={!dlna}>
+        <FormInput id="srv_url" bind:value={url} mono placeholder={dlna ? "http://nas.local:8200" : jellyfin ? "http://nas.local:8096" : "https://music.example.com"} disabled={busy} oninput={() => (erreur = null)} onenter={connect} />
+      </FormField>
+    {/if}
 
     {#if dlna}
       <p class="flex gap-2 text-xs leading-relaxed text-(--rg-mu)">
@@ -157,20 +188,20 @@
         {$t("servers.dlna_address_note")}
       </p>
     {:else if avecCle}
-      <div class="grid gap-4 max-sm:grid-cols-1 {jellyfin ? 'grid-cols-2' : ''}">
-        {#if jellyfin}
-          <FormField label={$t("servers.username")} for="srv_user" required>
-            <FormInput id="srv_user" bind:value={username} mono disabled={busy} oninput={() => (erreur = null)} onenter={connect} />
+      <div class="grid gap-4 max-sm:grid-cols-1 {jellyfin || qobuz ? 'grid-cols-2' : ''}">
+        {#if jellyfin || qobuz}
+          <FormField label={qobuz ? "Email or account label (optional)" : $t("servers.username")} for="srv_user" required={jellyfin}>
+            <FormInput id="srv_user" bind:value={username} mono placeholder={qobuz ? "audiophile@example.com" : ""} disabled={busy} oninput={() => (erreur = null)} onenter={connect} />
           </FormField>
         {/if}
-        <FormField label={$t("servers.api_key")} for="srv_key" required>
+        <FormField label={qobuz ? "Qobuz Token (user_auth_token)" : $t("servers.api_key")} for="srv_key" required>
           <FormInput id="srv_key" bind:value={apiKey} mono password disabled={busy} oninput={() => (erreur = null)} onenter={connect} />
         </FormField>
       </div>
     {:else}
       <div class="grid grid-cols-2 gap-4 max-sm:grid-cols-1">
-        <FormField label={$t("servers.username")} for="srv_user" required>
-          <FormInput id="srv_user" bind:value={username} mono disabled={busy} oninput={() => (erreur = null)} onenter={connect} />
+        <FormField label={qobuz ? "Qobuz Email or Username" : $t("servers.username")} for="srv_user" required>
+          <FormInput id="srv_user" bind:value={username} mono placeholder={qobuz ? "audiophile@example.com" : ""} disabled={busy} oninput={() => (erreur = null)} onenter={connect} />
         </FormField>
         <FormField label={$t("servers.password")} for="srv_pw" required={!jellyfin}>
           <FormInput id="srv_pw" bind:value={password} password disabled={busy} oninput={() => (erreur = null)} onenter={connect} />
@@ -182,11 +213,23 @@
     <div class="flex flex-wrap items-start gap-x-4 gap-y-2">
       <p class="flex-1 min-w-60 flex gap-2 text-xs leading-relaxed text-(--rg-mu)">
         <Icon icon="material-symbols:lock-outline" width="15" class="shrink-0 mt-0.5" />
-        {$t(`servers.${avecCle ? "api_key_note" : "password_note"}${jellyfin ? "_jellyfin" : ""}`)}
+        {#if qobuz}
+          {avecCle
+            ? "Tip: You can paste your user_auth_token (or app_id:app_secret:user_auth_token) from an active play.qobuz.com session."
+            : "Your password is only used to request a Qobuz session token; it is never stored on disk."}
+        {:else}
+          {$t(`servers.${avecCle ? "api_key_note" : "password_note"}${jellyfin ? "_jellyfin" : ""}`)}
+        {/if}
       </p>
       <button type="button" onclick={() => { avecCle = !avecCle; erreur = null; }}
               class="text-xs font-semibold cursor-pointer text-(--rg-gtx) hover:underline underline-offset-2">
-        {avecCle ? $t("servers.use_password") : $t("servers.use_api_key")}
+        {qobuz
+          ? avecCle
+            ? "Use email & password"
+            : "Use token (user_auth_token)"
+          : avecCle
+            ? $t("servers.use_password")
+            : $t("servers.use_api_key")}
       </button>
     </div>
     {/if}

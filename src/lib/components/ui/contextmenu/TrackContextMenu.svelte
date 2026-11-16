@@ -128,11 +128,11 @@
     const artist = track.artist ?? track.artist_name;
     const parts = [
       track.title ? `"${track.title}"` : "",
-      artist ? `oleh ${artist}` : "",
+      artist ? `by ${artist}` : "",
       track.album ? `(album ${track.album})` : "",
       track.genre ? `genre ${track.genre}` : "",
     ].filter(Boolean).join(" ");
-    const seedPrompt = `Lagu-lagu yang memiliki nuansa, genre, atau energi senada dengan ${parts || "lagu ini"}, dengan transisi yang halus.`;
+    const seedPrompt = `Tracks with a similar mood, genre, or energy to ${parts || "this track"}, ordered for smooth transitions.`;
     const seedName = track.title ? `Mix · ${track.title.slice(0, 28)}` : "";
 
     onclose();
@@ -343,7 +343,7 @@
     onclick={handleAiSimilarPlaylist}
   >
     <Icon icon="mynaui:sparkles" width="14" class="text-violet-500" />
-    AI Playlist Senada
+    AI Similar Playlist
   </button>
   {/if}
 

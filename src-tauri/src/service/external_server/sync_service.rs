@@ -11,6 +11,7 @@ use tauri::Emitter;
 use crate::core::subsonic::catalog::RemoteSong;
 use crate::entity::audio::audio_file::{AudioFile, AudioFormat};
 use crate::entity::audio::audio_tags::AudioTags;
+use crate::mapper::library::track::track_list_item_view::TrackListView;
 use crate::helper::library::thumbnail_helper::thumbnail_saver;
 use crate::helper::task::TaskToken;
 use crate::repository::library::library_files_repository::LibraryFilesRepository;
@@ -194,7 +195,12 @@ async fn run(pool: &SqlitePool, covers_dir: &Path, library_id: i64, token: &Task
     }
 
     // Disparus du serveur (synchronisation complète seulement) : retirés, avec les albums vidés.
-    let removed = if cancelled { 0 } else { remove_missing(pool, library_id, &seen).await.unwrap_or(0) };
+    // Pour Qobuz, on conserve les titres importés à la demande depuis la recherche du catalogue.
+    let removed = if cancelled || matches!(server, crate::core::remote::Backend::Qobuz(_)) {
+        0
+    } else {
+        remove_missing(pool, library_id, &seen).await.unwrap_or(0)
+    };
     if !cancelled {
         match feedback_service::apply_server_state(pool, server_id, &songs, server.has_ratings()).await {
             Ok((likes, ratings)) if likes + ratings > 0 => log::info!("☁️  Depuis le serveur : {likes} favori(s), {ratings} note(s)"),
@@ -219,6 +225,70 @@ async fn fetch_cover(server: &crate::core::remote::Backend, id: &str, covers_dir
     let bytes = server.cover_art(id, 600).await?;
     let dir = covers_dir.to_path_buf();
     tokio::task::spawn_blocking(move || thumbnail_saver(&dir, &bytes, false).ok()).await.ok().flatten()
+}
+
+/// Importe immédiatement un ou plusieurs morceaux distants (ex. recherche catalogue Qobuz)
+/// dans la bibliothèque principale du serveur et renvoie leurs vues `TrackListView` prêtes à jouer.
+pub async fn import_songs_on_demand(
+    app: &tauri::AppHandle,
+    pool: &SqlitePool,
+    server_id: i64,
+    songs: &[RemoteSong],
+) -> Result<Vec<TrackListView>, String> {
+    if songs.is_empty() {
+        return Ok(Vec::new());
+    }
+    let libraries = ServerRepository::libraries(pool, server_id).await.map_err(|e| e.to_string())?;
+    let target_lib = libraries
+        .iter()
+        .find(|l| l.remote_folder_id.as_deref() == Some("favorites"))
+        .or_else(|| libraries.first())
+        .ok_or_else(|| "No library linked to this Qobuz account".to_string())?;
+    let library_id = target_lib.id;
+
+    let server = ServerRepository::server(pool, server_id).await?;
+    let covers_dir = create_context(app.clone(), pool).covers_dir;
+    let mut covers: HashMap<String, Option<String>> = HashMap::new();
+    let mut pending = Vec::with_capacity(songs.len());
+
+    for song in songs {
+        let path = song_path(server_id, song);
+        let key = song.album_id.clone().or_else(|| song.cover_art.clone()).unwrap_or_default();
+        if !covers.contains_key(&key) {
+            let thumb = match song.cover_art.as_deref() {
+                Some(id) => fetch_cover(&server, id, &covers_dir).await,
+                None => None,
+            };
+            covers.insert(key.clone(), thumb);
+        }
+        pending.push(as_analysis(path, song, covers.get(&key).cloned().flatten()));
+    }
+
+    let mut views = Vec::with_capacity(pending.len());
+    let mut tx = pool.begin_with("BEGIN IMMEDIATE").await.map_err(|e| e.to_string())?;
+    for analysis in pending {
+        let (view, _) = save_analysed_to_db(&mut tx, library_id, None, analysis).await?;
+        views.push(view);
+    }
+    tx.commit().await.map_err(|e| e.to_string())?;
+
+    if songs.iter().any(|s| s.starred) {
+        let _ = feedback_service::apply_server_state(pool, server_id, songs, false).await;
+    }
+
+    let _ = app.emit(
+        "import-complete",
+        ImportComplete {
+            library_id,
+            directory: target_lib.name.clone(),
+            total: views.len(),
+            cancelled: false,
+            duration_ms: 0,
+            skipped: 0,
+            removed: 0,
+        },
+    );
+    Ok(views)
 }
 
 async fn remove_missing(pool: &SqlitePool, library_id: i64, seen: &HashSet<String>) -> Result<u64, sqlx::Error> {

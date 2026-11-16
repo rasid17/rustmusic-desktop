@@ -2,7 +2,43 @@
 export type ServerLibrary = { id: number; name: string; remote_folder_id: string | null; total_tracks: number };
 
 /** La sorte de serveur. */
-export type ServerKind = "subsonic" | "jellyfin" | "dlna";
+export type ServerKind = "subsonic" | "jellyfin" | "dlna" | "qobuz";
+
+/** Album trouvé dans le catalogue global Qobuz. */
+export type QobuzSearchAlbum = {
+  id: string;
+  title: string;
+  artist: string;
+  year: number | null;
+  tracks_count: number;
+  duration: number | null;
+  bit_depth: number | null;
+  sampling_rate: number | null;
+  hires: boolean;
+  cover_url: string | null;
+  genre: string | null;
+};
+
+/** Morceau trouvé dans le catalogue global Qobuz. */
+export type QobuzSearchTrack = {
+  id: string;
+  title: string;
+  artist: string;
+  album: string;
+  album_id: string;
+  year: number | null;
+  duration: number | null;
+  bit_depth: number | null;
+  sampling_rate: number | null;
+  hires: boolean;
+  cover_url: string | null;
+};
+
+/** Résultats de recherche du catalogue global Qobuz. */
+export type QobuzSearchResults = {
+  albums: QobuzSearchAlbum[];
+  tracks: QobuzSearchTrack[];
+};
 
 /** Un serveur du profil (OpenSubsonic ou Jellyfin) et ses bibliothèques. */
 export type ServerEntry = {

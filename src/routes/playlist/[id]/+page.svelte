@@ -147,7 +147,7 @@
       toasts.push({
         type: "success",
         title: "AI Extend Playlist",
-        message: `+${res.track_count} lagu senada ditambahkan (${res.agent_used}).`,
+        message: `+${res.track_count} matching tracks added (${res.agent_used}).`,
       });
     } catch (e) {
       console.error("[playlist] ai extend :", e);
@@ -180,7 +180,7 @@
       toasts.push({
         type: "success",
         title: "AI Reorder Flow",
-        message: `Urutan ${res.track_count} lagu telah dioptimalkan (${res.agent_used}).`,
+        message: `Order of ${res.track_count} tracks optimized (${res.agent_used}).`,
       });
     } catch (e) {
       console.error("[playlist] ai reorder :", e);
@@ -272,14 +272,14 @@
       {#if !shown.is_smart && !shown.is_auto}
         <RoundButton
           icon={aiBusy === "extend" ? "lucide:loader-2" : "mynaui:sparkles"}
-          title={aiBusy === "extend" ? "Menambahkan lagu senada..." : "AI Extend (+10 Lagu Senada)"}
+          title={aiBusy === "extend" ? "Adding matching tracks..." : "AI Extend (+10 Similar Tracks)"}
           disabled={aiBusy !== null}
           onclick={handleAiExtend}
         />
         {#if tracks.length >= 3}
           <RoundButton
             icon={aiBusy === "reorder" ? "lucide:loader-2" : "material-symbols:low-priority-rounded"}
-            title={aiBusy === "reorder" ? "Mengurutkan alur..." : "AI Reorder Flow (Urutkan Transisi Halus)"}
+            title={aiBusy === "reorder" ? "Optimizing track flow..." : "AI Reorder Flow (Smooth Transitions)"}
             disabled={aiBusy !== null}
             onclick={handleAiReorder}
           />

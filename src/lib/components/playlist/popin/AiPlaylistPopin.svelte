@@ -63,10 +63,10 @@
   const activeLibraryId = $derived(libraryId ?? $libraryStore.librarySelected?.id ?? null);
 
   const SUGGESTIONS = [
-    "Pop & Indie santai tanpa musik orkestra/klasik",
-    "Upbeat energetic tracks untuk fokus kerja",
-    "Acoustic & warm vocals untuk malam hari",
-    "Hidden gems yang jarang diputar tapi seirama",
+    "Chill Pop & Indie without orchestral or classical music",
+    "Upbeat energetic tracks for deep focus",
+    "Acoustic & warm vocals for late night listening",
+    "Rarely played hidden gems with a cohesive vibe",
   ];
 
   onMount(async () => {
@@ -104,12 +104,12 @@
   async function submit() {
     errorText = null;
     if (!prompt.trim()) {
-      errorText = "Masukkan deskripsi suasana, genre, atau instruksi playlist.";
+      errorText = "Please describe the mood, genre, or instructions for your playlist.";
       return;
     }
     const profilId = $profilSelector.profilSelected?.id;
     if (!profilId) {
-      errorText = "Profil aktif tidak ditemukan.";
+      errorText = "No active profile found.";
       return;
     }
 
@@ -133,7 +133,7 @@
       toasts.push({
         type: "success",
         title: res.playlist.name,
-        message: `${res.track_count} lagu dipilih oleh ${res.agent_used}`,
+        message: `${res.track_count} tracks curated by ${res.agent_used}`,
       });
       popinStore.close();
       goto(`/playlist/${res.playlist.id}`);
@@ -168,7 +168,7 @@
     {#if loadingAgents}
       <div class="flex items-center gap-2 text-xs text-(--rg-mu) py-1">
         <Icon icon="lucide:loader-2" width="15" class="animate-spin" />
-        Mendeteksi CLI agent di sistem...
+        Detecting CLI agents on system...
       </div>
     {:else}
       <div id="ai_agent" class="flex flex-wrap gap-2">
@@ -199,7 +199,7 @@
 
   {#if selectedAgentId === "custom" || selectedAgentId === "ollama"}
     <FormField
-      label={selectedAgentId === "ollama" ? "Model Ollama" : "Perintah CLI Custom (menerima prompt via stdin)"}
+      label={selectedAgentId === "ollama" ? "Ollama Model" : "Custom CLI Command (receives prompt via stdin)"}
       for="ai_custom_cmd"
     >
       <FormInput
@@ -213,7 +213,7 @@
 
   <!-- Prompt utilisateur -->
   <FormField
-    label="Instruksi / Suasana Playlist"
+    label="Playlist Prompt / Mood"
     for="ai_prompt"
     required
     error={errorText ?? ""}
@@ -222,7 +222,7 @@
       id="ai_prompt"
       multiline
       bind:value={prompt}
-      placeholder="Contoh: Lagu pop & synthpop santai untuk malam hari, jangan masukkan lagu orchestra atau klasik..."
+      placeholder="Example: Chill pop & synthpop tracks for late night listening, exclude orchestral or classical pieces..."
       invalid={!!errorText}
       disabled={isGenerating}
       oninput={() => (errorText = null)}
@@ -250,12 +250,12 @@
       <FormInput
         id="ai_pl_name"
         bind:value={playlistName}
-        placeholder="Biarkan kosong agar diberi nama oleh AI"
+        placeholder="Leave blank to let AI name it"
         disabled={isGenerating}
       />
     </FormField>
 
-    <FormField label="Jumlah Lagu" for="ai_max_tracks">
+    <FormField label="Track Count" for="ai_max_tracks">
       <div id="ai_max_tracks" class="flex items-center gap-1.5 h-10">
         {#each [15, 25, 40, 60] as count}
           <button
@@ -316,7 +316,7 @@
   cancelLabel={$t("common.cancel")}
   oncancel={close}
   cancelDisabled={isGenerating}
-  submitLabel={isGenerating ? "AI sedang menyusun..." : "Generate Playlist"}
+  submitLabel={isGenerating ? "AI is curating..." : "Generate Playlist"}
   submitIcon="material-symbols:auto-awesome-rounded"
   onsubmit={submit}
   busy={isGenerating}

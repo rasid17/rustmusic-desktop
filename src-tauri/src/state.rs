@@ -7,6 +7,8 @@ use tokio::sync::Mutex;
 
 use crate::core::batch::runner::BatchRegistry;
 use crate::core::dlna_server::server::DlnaServer;
+use crate::core::mobile_remote::server::MobileRemoteServer;
+use crate::core::mobile_remote::state::MobileRemoteSharedState;
 
 #[derive(Clone)]
 pub struct AppState {
@@ -14,6 +16,9 @@ pub struct AppState {
     /// DLNA server lifecycle. `None` when stopped, `Some(...)` when running.
     /// Wrapped in Mutex so start/stop commands serialize properly.
     pub dlna_server: Arc<Mutex<Option<DlnaServer>>>,
+    /// Mobile Remote HTTP server lifecycle & shared state.
+    pub mobile_remote_server: Arc<Mutex<Option<MobileRemoteServer>>>,
+    pub mobile_remote_state: Arc<MobileRemoteSharedState>,
     /// Lots en cours. Point de rendez-vous entre la commande qui lance un
     /// traitement de masse et celle qui l'annule — elles arrivent par deux
     /// appels séparés.
@@ -170,6 +175,8 @@ impl AppState {
         Ok(Self {
             pool,
             dlna_server: Arc::new(Mutex::new(None)),
+            mobile_remote_server: Arc::new(Mutex::new(None)),
+            mobile_remote_state: Arc::new(MobileRemoteSharedState::new()),
             batch: Arc::new(BatchRegistry::default()),
         })
     }

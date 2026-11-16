@@ -265,12 +265,12 @@
         </div>
 
       {:else}
-        <!-- Mode Dengar / Preset Folder -->
+        <!-- Listening Mode / Folder Presets -->
         <div class="mb-4 p-3.5 rounded-2xl bg-(--rg-creux) border border-(--rg-bd) flex flex-col gap-2.5">
           <div class="flex items-center justify-between gap-2">
             <div class="flex items-center gap-1.5 text-xs font-bold text-(--rg-tx2)">
               <Icon icon="material-symbols:tune-rounded" width="16" class="text-(--rg-g)" />
-              <span>Mode Dengar / Preset Folder</span>
+              <span>Listening Mode / Folder Presets</span>
             </div>
             <button
               type="button"
@@ -279,7 +279,7 @@
               onclick={() => { isCreatingPreset = !isCreatingPreset; }}
             >
               <Icon icon={isCreatingPreset ? "material-symbols:close-rounded" : "material-symbols:bookmark-add-outline-rounded"} width="14" />
-              <span>{isCreatingPreset ? 'Batal' : '+ Simpan Preset'}</span>
+              <span>{isCreatingPreset ? 'Cancel' : '+ Save Preset'}</span>
             </button>
           </div>
 
@@ -291,7 +291,7 @@
               <input
                 type="text"
                 class="flex-1 px-3 py-1.5 text-xs rounded-xl bg-(--rg-carte) border border-(--rg-bd) text-(--rg-tx) placeholder:text-(--rg-mu) focus:outline-none focus:border-(--rg-g)"
-                placeholder="Nama preset (cth. Pop & Fokus, Tanpa Orchestra...)"
+                placeholder="Preset name (e.g. Pop & Focus, No Orchestra...)"
                 bind:value={newPresetName}
               />
               <button
@@ -299,14 +299,14 @@
                 disabled={!newPresetName.trim()}
                 class="px-3 py-1.5 rounded-xl text-xs font-bold bg-(--rg-g) text-(--rg-on-g) disabled:opacity-40 cursor-pointer disabled:cursor-default transition hover:brightness-110"
               >
-                Simpan
+                Save
               </button>
             </form>
           {/if}
 
           <!-- Preset chips row -->
           <div class="flex flex-wrap items-center gap-1.5 pt-0.5">
-            <!-- Built-in chip: Semua Aktif -->
+            <!-- Built-in chip: All Active -->
             <button
               type="button"
               disabled={applyingBatch}
@@ -315,10 +315,10 @@
                        ? 'bg-(--rg-gbg) text-(--rg-g) border-(--rg-gbd) shadow-xs'
                        : 'bg-(--rg-carte) text-(--rg-mu) border-(--rg-bd) hover:text-(--rg-tx) hover:border-(--rg-bd2)'}"
               onclick={() => handleApplyBatch(dirs.map(d => d.id))}
-              title="Aktifkan semua folder"
+              title="Enable all folders"
             >
               <Icon icon="material-symbols:select-all-rounded" width="14" />
-              <span>Semua Aktif</span>
+              <span>All Active</span>
             </button>
 
             <!-- Custom profiles -->
@@ -335,7 +335,7 @@
                   disabled={applyingBatch}
                   class="flex items-center gap-1.5 pl-3 py-1.5 pr-1.5 cursor-pointer text-left"
                   onclick={() => handleApplyBatch(profile.activeDirIds)}
-                  title="{profile.activeDirIds.length} folder aktif: {profile.name}"
+                  title="{profile.activeDirIds.length} active folders: {profile.name}"
                 >
                   <Icon icon="material-symbols:bookmark-outline-rounded" width="14" />
                   <span>{profile.name}</span>
@@ -345,8 +345,8 @@
                   type="button"
                   class="w-6 h-6 mr-1 rounded-lg flex items-center justify-center cursor-pointer transition-colors
                          opacity-60 hover:opacity-100 hover:bg-black/10 dark:hover:bg-white/10"
-                  title="Hapus preset {profile.name}"
-                  aria-label="Hapus preset {profile.name}"
+                  title="Delete preset {profile.name}"
+                  aria-label="Delete preset {profile.name}"
                   onclick={(e) => handleDeletePreset(e, profile.id)}
                 >
                   <Icon icon="material-symbols:close-rounded" width="13" />
@@ -381,7 +381,7 @@
                     <span class="px-2 py-0.5 rounded-md bg-(--rg-s2) text-(--rg-tx2)">{formatSize(dir.total_size)}</span>
                   {/if}
                   {#if dir.watch_enabled}
-                    <span class="flex items-center gap-1 px-2 py-0.5 rounded-md bg-(--rg-gbg) text-(--rg-g)" title="Auto-Watch aktif (pantau file baru otomatis)">
+                    <span class="flex items-center gap-1 px-2 py-0.5 rounded-md bg-(--rg-gbg) text-(--rg-g)" title="Auto-Watch active (automatically monitors new files)">
                       <Icon icon="lucide:radar" width="12" />
                       Auto-Watch
                     </span>
@@ -429,8 +429,8 @@
                   type="button"
                   class="w-8 h-8 rounded-[9px] flex items-center justify-center cursor-pointer transition-colors
                          {dir.watch_enabled ? 'text-(--rg-g) bg-(--rg-gbg) border border-(--rg-gbd)' : 'text-(--rg-mu) hover:bg-(--rg-s2) hover:text-(--rg-tx)'}"
-                  title={dir.watch_enabled ? 'Auto-Watch aktif (pantau file baru otomatis)' : 'Aktifkan Auto-Watch folder ini'}
-                  aria-label={dir.watch_enabled ? 'Auto-Watch aktif' : 'Aktifkan Auto-Watch'}
+                  title={dir.watch_enabled ? 'Auto-Watch active (automatically monitors new files)' : 'Enable Auto-Watch for this folder'}
+                  aria-label={dir.watch_enabled ? 'Auto-Watch active' : 'Enable Auto-Watch'}
                   onclick={() => handleToggleDirWatch(dir)}
                 >
                   <Icon icon="lucide:radar" width="18" />

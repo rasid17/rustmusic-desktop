@@ -344,8 +344,8 @@
           <div class="flex items-center gap-2.5 min-w-0">
             <Icon icon="material-symbols:smart-toy-outline-rounded" width="20" class="text-purple-400 shrink-0" />
             <div class="text-xs text-purple-300">
-              <span class="font-bold">Ingin buat playlist pakai Prompt AI?</span>
-              <span class="text-neutral-400 ml-1">Klik di sini untuk beralih ke AI Playlist Generator.</span>
+              <span class="font-bold">Want to create a playlist with an AI Prompt?</span>
+              <span class="text-neutral-400 ml-1">Click here to switch to AI Playlist Generator.</span>
             </div>
           </div>
           <Icon icon="material-symbols:arrow-forward-ios-rounded" width="14" class="text-purple-400 shrink-0" />

@@ -10,6 +10,7 @@ import { popinStore } from "#lib/stores/ui/popin.store";
 import AddLibraryPopin from "#lib/components/library/common/popin/AddLibraryPopin.svelte";
 import AddPlaylistPopin from "#lib/components/playlist/popin/AddPlaylistPopin.svelte";
 import AiPlaylistPopin from "#lib/components/playlist/popin/AiPlaylistPopin.svelte";
+import QobuzCatalogPopin from "#lib/components/mediaServer/QobuzCatalogPopin.svelte";
 import SmartPlaylistPopin from "#lib/components/playlist/smart/SmartPlaylistPopin.svelte";
 import PlaylistZoneMenu from "#lib/components/ui/contextmenu/PlaylistZoneMenu.svelte";
 import LibraryZoneMenu from "#lib/components/ui/contextmenu/LibraryZoneMenu.svelte";
@@ -34,7 +35,10 @@ import SidebarTitle from "./SidebarTitle.svelte";
 import SidebarThumbnail from "./SidebarThumbnail.svelte";
 import SourceSwitcher from "./SourceSwitcher.svelte";
 import { currentSource } from "#lib/stores/source/source.store";
+import { serverStore } from "#lib/stores/mediaServer/mediaServer.store";
 import { sidebarOrganize } from "#lib/stores/ui/sidebarOrganize.store";
+
+const qobuzServer = $derived($serverStore.servers.find((s) => s.kind === "qobuz" && s.enabled) ?? null);
 
 const pathname = $derived(page.url.pathname);
 const replie = $derived($settingsStore.sidebar_collapsed === 'true');
@@ -325,6 +329,28 @@ onMount(() => {
     {/if}
 
     <SidebarNav {replie} />
+
+    {#if qobuzServer}
+      <button
+        type="button"
+        class="flex items-center gap-2.5 rounded-xl cursor-pointer transition-colors
+               bg-amber-500/10 border border-amber-500/30 text-amber-600 dark:text-amber-300 hover:bg-amber-500/18
+               {replie ? 'p-2 justify-center' : 'w-full px-3 py-2 text-xs font-semibold'}"
+        onclick={() =>
+          popinStore.open(
+            `Qobuz Hi-Res Catalog — ${qobuzServer.name}`,
+            QobuzCatalogPopin,
+            { server: qobuzServer },
+            { size: 'lg', icon: 'material-symbols:high-quality-outline-rounded' },
+          )}
+        title="Search and stream the Qobuz Hi-Res catalog in Bit-Perfect quality"
+      >
+        <Icon icon="material-symbols:high-quality-outline-rounded" width="18" class="shrink-0" />
+        {#if !replie}
+          <span class="truncate">Qobuz Hi-Res Catalog</span>
+        {/if}
+      </button>
+    {/if}
 
     {#if !$libraryStore.isLoading && $libraryStore.libraries.length === 0}
       <button

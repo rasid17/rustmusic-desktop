@@ -39,6 +39,7 @@ import { refreshDlnaStatus } from "#lib/stores/dlna/dlna.store";
 import { initPlaybackPipelineListener } from "#lib/stores/player/playbackPipeline.store";
 import { networkPlayerStore } from "#lib/stores/audio/networkPlayer.store";
 import { ampRemoteStore } from "#lib/stores/audio/ampRemote.store";
+import { initMobileRemoteBridge, destroyMobileRemoteBridge } from "#lib/services/remote/mobileRemoteBridge";
 import { initBatchListeners } from "#lib/stores/ui/batch.store";
 import { initUnavailableDirsListener } from "#lib/stores/library/unavailableDirs.store";
 import BatchPanel from "#lib/components/ui/batch/BatchPanel.svelte";
@@ -183,6 +184,7 @@ onMount(async () => {
   networkPlayerStore.init();
   // Ampli mémorisé : rejoint par le moteur au lancement si la télécommande est active.
   ampRemoteStore.init();
+  initMobileRemoteBridge();
   initBatchListeners();
   // Dossier introuvable au scan : propose de suivre le partage remonté ailleurs.
   void initUnavailableDirsListener();
@@ -231,6 +233,7 @@ onMount(async () => {
 
 onDestroy(() => {
   if (miniFenetre) return;
+  destroyMobileRemoteBridge();
   playerService.destroy();
   importProgressStore.destroy();
   taskProgressStore.destroy();
@@ -315,8 +318,8 @@ function handleKeydown(e: KeyboardEvent) {
 
       <div class="hidden sm:flex items-center gap-0.5">
         {#each [
-          { action: goBack, icone: "heroicons:chevron-left", label: "Retour" },
-          { action: goForward, icone: "heroicons:chevron-right", label: "Suivant" },
+          { action: goBack, icone: "heroicons:chevron-left", label: "Back" },
+          { action: goForward, icone: "heroicons:chevron-right", label: "Forward" },
         ] as nav (nav.label)}
           <button
             onclick={nav.action}

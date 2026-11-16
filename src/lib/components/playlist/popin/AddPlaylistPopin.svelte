@@ -106,8 +106,8 @@
         <Icon icon="material-symbols:smart-toy-outline-rounded" width="18" />
       </div>
       <div class="min-w-0">
-        <div class="text-xs font-bold text-purple-300">Buat Playlist dengan Prompt AI</div>
-        <div class="text-[11px] text-neutral-400 truncate">Ketik suasana/genre (misal: "lagu santai malam hari")</div>
+        <div class="text-xs font-bold text-purple-300">Create Playlist with AI Prompt</div>
+        <div class="text-[11px] text-neutral-400 truncate">Describe a mood or genre (e.g., "late night chill synthpop")</div>
       </div>
     </div>
     <Icon icon="material-symbols:arrow-forward-ios-rounded" width="14" class="text-purple-400 shrink-0" />
