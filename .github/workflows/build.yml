@@ -9,9 +9,6 @@ on:
         default: ""
         type: string
   push:
-    branches:
-      - main
-      - feat/upstream-select-20261023
     tags:
       - "v*"
 
@@ -175,10 +172,12 @@ jobs:
           path: release-assets
           merge-multiple: true
 
-      - name: Generate SHA256 checksums
+      - name: Flatten release assets & generate SHA256 checksums
         shell: bash
         run: |
-          cd release-assets
+          mkdir -p release-files
+          find release-assets -type f -exec cp -v {} release-files/ \;
+          cd release-files
           sha256sum * > SHA256SUMS.txt
 
       - name: Publish GitHub Release
@@ -190,6 +189,6 @@ jobs:
           draft: false
           prerelease: false
           files: |
-            release-assets/*
+            release-files/*
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
