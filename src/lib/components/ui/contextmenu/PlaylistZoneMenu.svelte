@@ -4,9 +4,13 @@
   import { t } from "#lib/i18n";
   import { portal } from "#lib/helper/portal";
   import { settingsStore } from "#lib/stores/settings/settings.store";
+  import { popinStore } from "#lib/stores/ui/popin.store";
+  import { libraryStore } from "#lib/stores/library/library.store";
+  import AiPlaylistPopin from "#lib/components/playlist/popin/AiPlaylistPopin.svelte";
 
   /** Les options de la zone des playlists, sous le bouton « … ». */
   let { x, y, onclose, onorganize }: { x: number; y: number; onclose: () => void; onorganize?: () => void } = $props();
+  const libraryId = $derived($libraryStore.librarySelected?.id ?? null);
 
   /**
    * Les raccourcis bâtis dans l'application.
@@ -71,6 +75,26 @@
          shadow-xl shadow-black/10 dark:shadow-2xl dark:shadow-black/50"
   style={menuStyle}
 >
+  <button
+    class={ligne}
+    onclick={() => {
+      onclose();
+      popinStore.open("AI Playlist Generator", AiPlaylistPopin, { libraryId }, {
+        size: "lg",
+        icon: "material-symbols:auto-awesome-rounded",
+      });
+    }}
+  >
+    <span class="w-7 h-7 rounded-lg shrink-0 flex items-center justify-center
+                 bg-purple-500/12 border border-purple-500/25">
+      <Icon icon="material-symbols:smart-toy-outline-rounded" width="15" class="text-purple-600 dark:text-purple-400" />
+    </span>
+    <span class="flex-1 text-[13px] font-semibold text-neutral-800 dark:text-neutral-100">
+      AI Playlist Generator (Prompt)
+    </span>
+    <Icon icon="lucide:chevron-right" width="13" class="text-neutral-300 dark:text-neutral-600 shrink-0" />
+  </button>
+
   <button class={ligne} onclick={() => { onclose(); goto('/playlists'); }}>
     <span class="w-7 h-7 rounded-lg shrink-0 flex items-center justify-center
                  bg-emerald-500/12 border border-emerald-500/25">

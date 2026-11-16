@@ -1743,11 +1743,11 @@ pub struct GenreMix {
 pub async fn get_mix_genres(state: State<'_, AppState>, library_id: i64) -> Result<Vec<GenreMix>, String> {
     use crate::core::mix_variety::{MIN_ARTISTES, MIN_TITRES};
     let lignes = sqlx::query_as::<_, (String, i64, i64)>(
-        "SELECT lc.genre, COUNT(*) n, COUNT(DISTINCT lt.artist_id) FROM library_tracks lt
+        "SELECT TRIM(lc.genre), COUNT(*) n, COUNT(DISTINCT lt.artist_id) FROM library_tracks lt
          JOIN library_files lf ON lf.id = lt.file_id AND NOT EXISTS (SELECT 1 FROM library_dirs ld WHERE ld.id = lf.library_dir_id AND ld.is_active = 0)
          JOIN library_cache lc ON lc.id = lt.cache_id
-         WHERE lt.library_id = ? AND lc.genre IS NOT NULL AND lc.genre != ''
-         GROUP BY lc.genre HAVING n >= ? AND COUNT(DISTINCT lt.artist_id) >= ? ORDER BY n DESC",
+         WHERE lt.library_id = ? AND lc.genre IS NOT NULL AND TRIM(lc.genre) != ''
+         GROUP BY LOWER(TRIM(lc.genre)) HAVING n >= ? AND COUNT(DISTINCT lt.artist_id) >= ? ORDER BY n DESC",
     )
     .bind(library_id)
     .bind(MIN_TITRES)

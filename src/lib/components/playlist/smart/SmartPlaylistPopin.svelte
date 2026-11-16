@@ -9,6 +9,7 @@
   import { libraryStore } from "#lib/stores/library/library.store";
   import { forget } from "#lib/stores/mix/mix.store";
   import { PLAYLIST_COLORS, PLAYLIST_ICONS } from "../playlistConfig";
+  import AiPlaylistPopin from "../popin/AiPlaylistPopin.svelte";
   import RuleGroup from "./RuleGroup.svelte";
   import { PRESETS, type Preset } from "./presets";
   import {
@@ -333,6 +334,23 @@
     </div>
   {:else}
     <div class="flex-1 overflow-y-auto scrollbar-app px-7 pt-6 pb-7 space-y-7">
+
+      {#if playlistId == null}
+        <button
+          type="button"
+          onclick={() => popinStore.open("AI Playlist Generator", AiPlaylistPopin, { libraryId }, { size: "lg", icon: "material-symbols:auto-awesome-rounded" })}
+          class="w-full flex items-center justify-between gap-3 px-4 py-2.5 rounded-xl border border-purple-500/35 bg-purple-500/10 hover:bg-purple-500/15 text-left transition cursor-pointer"
+        >
+          <div class="flex items-center gap-2.5 min-w-0">
+            <Icon icon="material-symbols:smart-toy-outline-rounded" width="20" class="text-purple-400 shrink-0" />
+            <div class="text-xs text-purple-300">
+              <span class="font-bold">Ingin buat playlist pakai Prompt AI?</span>
+              <span class="text-neutral-400 ml-1">Klik di sini untuk beralih ke AI Playlist Generator.</span>
+            </div>
+          </div>
+          <Icon icon="material-symbols:arrow-forward-ios-rounded" width="14" class="text-purple-400 shrink-0" />
+        </button>
+      {/if}
 
       <!-- Identité : la vignette telle qu'elle apparaîtra, le nom, puis couleur et icône. -->
       <div class="flex items-start gap-5">

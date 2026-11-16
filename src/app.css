@@ -824,27 +824,60 @@ html, body {
 /* Chemin : tronqué par la gauche, la fin (dossier de l'album) reste lisible. */
 .lecteur-dossier { direction: rtl; text-align: left; }
 
+/* Fenêtre mini transparente (pour Pill / Sleeve / coins arrondis). */
+html.mini-window-transparent,
+html.mini-window-transparent body {
+  background: transparent !important;
+}
+
 /* Mini-lecteur : même palette que le dock, dégradé vertical, sélecteur d'onglets et paroles. */
 .mini-lecteur {
   --lc-seg: rgb(0 0 0 / 0.05); --lc-seg-bd: rgb(0 0 0 / 0.06); --lc-seg-on: #ffffff;
-  --lc-panneau: rgb(255 255 255 / 0.35); --lc-encours: oklch(0.86 calc(0.06 * var(--ls)) var(--lh) / 0.6);
+  --lc-panneau: rgb(255 255 255 / 0.45); --lc-encours: oklch(0.86 calc(0.06 * var(--ls)) var(--lh) / 0.6);
   --lc-ly: rgb(0 0 0 / 0.3); --lc-ly-passe: rgb(0 0 0 / 0.5);
-  background: linear-gradient(160deg,
-    oklch(0.88 calc(0.07 * var(--ls)) var(--lh)),
-    oklch(0.95 calc(0.03 * var(--ls)) var(--lh)) 55%,
-    oklch(0.975 calc(0.012 * var(--ls)) var(--lh)));
-  box-shadow: none;
+  --mini-glass-btn: rgb(0 0 0 / 0.07);
+  --mini-glass-btn-hover: rgb(0 0 0 / 0.13);
+  --mini-glass-btn-active: rgb(0 0 0 / 0.19);
+  --mini-glass-bd: rgb(0 0 0 / 0.09);
+  --mini-card-bd: oklch(0.76 calc(0.05 * var(--ls)) var(--lh) / 0.65);
+  --mini-specular: linear-gradient(90deg, transparent, rgb(255 255 255 / 0.85), transparent);
+  background:
+    linear-gradient(135deg, rgb(255 255 255 / 0.55) 0%, rgb(255 255 255 / 0.12) 48%, transparent 100%),
+    linear-gradient(160deg,
+      oklch(0.88 calc(0.07 * var(--ls)) var(--lh)),
+      oklch(0.95 calc(0.03 * var(--ls)) var(--lh)) 55%,
+      oklch(0.975 calc(0.012 * var(--ls)) var(--lh)));
+  box-shadow: inset 0 1px 0 rgb(255 255 255 / 0.85), inset 0 0 0 1px var(--mini-card-bd);
 }
 .dark .mini-lecteur {
-  --lc-seg: rgb(0 0 0 / 0.25); --lc-seg-bd: rgb(255 255 255 / 0.05); --lc-seg-on: rgb(255 255 255 / 0.1);
-  --lc-panneau: rgb(0 0 0 / 0.18); --lc-encours: oklch(0.35 calc(0.07 * var(--ls)) var(--lh) / 0.35);
+  --lc-seg: rgb(0 0 0 / 0.28); --lc-seg-bd: rgb(255 255 255 / 0.07); --lc-seg-on: rgb(255 255 255 / 0.14);
+  --lc-panneau: rgb(0 0 0 / 0.24); --lc-encours: oklch(0.35 calc(0.07 * var(--ls)) var(--lh) / 0.35);
   --lc-ly: rgb(255 255 255 / 0.28); --lc-ly-passe: rgb(255 255 255 / 0.45);
-  background: linear-gradient(160deg,
-    oklch(0.3 calc(0.07 * var(--ls)) var(--lh) / 0.97),
-    oklch(0.17 calc(0.03 * var(--ls)) var(--lh) / 0.98) 55%,
-    oklch(0.12 calc(0.012 * var(--ls)) var(--lh)));
-  /* Pas de liseré haut : la fenêtre a déjà le cadre du système. */
-  box-shadow: none;
+  --mini-glass-btn: rgb(255 255 255 / 0.12);
+  --mini-glass-btn-hover: rgb(255 255 255 / 0.22);
+  --mini-glass-btn-active: rgb(255 255 255 / 0.30);
+  --mini-glass-bd: rgb(255 255 255 / 0.14);
+  --mini-card-bd: rgb(255 255 255 / 0.16);
+  --mini-specular: linear-gradient(90deg, transparent, rgb(255 255 255 / 0.38), transparent);
+  background:
+    linear-gradient(135deg, rgb(255 255 255 / 0.12) 0%, rgb(255 255 255 / 0.03) 45%, transparent 100%),
+    linear-gradient(160deg,
+      oklch(0.28 calc(0.08 * var(--ls)) var(--lh) / 0.98),
+      oklch(0.16 calc(0.035 * var(--ls)) var(--lh) / 0.99) 55%,
+      oklch(0.11 calc(0.015 * var(--ls)) var(--lh)));
+  box-shadow: inset 0 1px 0 rgb(255 255 255 / 0.22), inset 0 0 0 1px var(--mini-card-bd);
+}
+.mini-glass-circle {
+  background: var(--mini-glass-btn);
+  box-shadow: inset 0 1px 0 rgb(255 255 255 / 0.14), inset 0 0 0 1px var(--mini-glass-bd);
+  transition: background-color 0.15s ease, transform 0.12s ease, color 0.15s ease;
+}
+.mini-glass-circle:hover {
+  background: var(--mini-glass-btn-hover);
+}
+.mini-glass-circle:active {
+  background: var(--mini-glass-btn-active);
+  transform: scale(0.94);
 }
 :root[data-contrast="high"] .mini-lecteur { --lc-ly: rgb(0 0 0 / 0.55); --lc-ly-passe: rgb(0 0 0 / 0.72); }
 :root[data-contrast="high"].dark .mini-lecteur { --lc-ly: rgb(255 255 255 / 0.55); --lc-ly-passe: rgb(255 255 255 / 0.72); }

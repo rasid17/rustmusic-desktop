@@ -46,6 +46,9 @@ export type MiniCmd =
   | "remove-track"
   | "clear-upcoming"
   | "toggle-like"
+  | "toggle-shuffle"
+  | "cycle-repeat"
+  | "reshuffle"
   | "exit-mini"
   | "close-app";
 
@@ -127,10 +130,19 @@ export function startMiniBridge(handlers: MiniBridgeHandlers): void {
         queueDebounce = setTimeout(() => {
           queueDebounce = null;
           const s = get(queueState);
-          emitTo("mini", "mini-state-queue", { tracks: s.tracks, currentIndex: s.currentIndex }).catch(noop);
+          emitTo("mini", "mini-state-queue", {
+            tracks: s.tracks,
+            currentIndex: s.currentIndex,
+            isShuffled: s.isShuffled,
+            repeatMode: s.repeatMode,
+          }).catch(noop);
         }, 200);
       } else {
-        emitTo("mini", "mini-state-index", { currentIndex: qs.currentIndex }).catch(noop);
+        emitTo("mini", "mini-state-index", {
+          currentIndex: qs.currentIndex,
+          isShuffled: qs.isShuffled,
+          repeatMode: qs.repeatMode,
+        }).catch(noop);
       }
     })
   );
@@ -154,7 +166,12 @@ export function startMiniBridge(handlers: MiniBridgeHandlers): void {
         emitTo("mini", "mini-state-player", { ...p } as PlayerSnapshot).catch(noop);
         const qs = get(queueState);
         lastTracksRef = qs.tracks;
-        emitTo("mini", "mini-state-queue", { tracks: qs.tracks, currentIndex: qs.currentIndex }).catch(noop);
+        emitTo("mini", "mini-state-queue", {
+          tracks: qs.tracks,
+          currentIndex: qs.currentIndex,
+          isShuffled: qs.isShuffled,
+          repeatMode: qs.repeatMode,
+        }).catch(noop);
         const paths = [...get(liked).paths].map((path) => ({ path, liked: true }));
         prevLiked = new Set(get(liked).paths);
         emitTo("mini", "mini-state-liked", { changes: paths }).catch(noop);
@@ -236,6 +253,18 @@ async function dispatch(msg: MiniCmdMessage, handlers: MiniBridgeHandlers): Prom
       case "toggle-like":
         if (payload?.path) await liked.toggle(payload.path);
         break;
+      case "toggle-shuffle":
+        await queueState.toggleShuffle();
+        break;
+      case "reshuffle":
+        await queueState.reshuffle();
+        break;
+      case "cycle-repeat": {
+        const cur = get(queueState).repeatMode;
+        const next = cur === "off" ? "all" : cur === "all" ? "one" : "off";
+        await queueState.setRepeatMode(next);
+        break;
+      }
       case "exit-mini":
         handlers.onExitMini();
         break;
@@ -340,13 +369,13 @@ export function initMiniClient(onReopen?: () => void): MiniClient {
       })
     );
     unlistenFns.push(
-      await listen<{ tracks: QueueTrack[]; currentIndex: number }>("mini-state-queue", (e) => {
+      await listen<{ tracks: QueueTrack[]; currentIndex: number; isShuffled?: boolean; repeatMode?: "off" | "all" | "one" }>("mini-state-queue", (e) => {
         queueState.hydrate(e.payload);
         premier();
       })
     );
     unlistenFns.push(
-      await listen<{ currentIndex: number }>("mini-state-index", (e) => {
+      await listen<{ currentIndex: number; isShuffled?: boolean; repeatMode?: "off" | "all" | "one" }>("mini-state-index", (e) => {
         queueState.hydrate(e.payload);
       })
     );

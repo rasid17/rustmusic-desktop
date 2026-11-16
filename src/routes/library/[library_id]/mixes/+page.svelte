@@ -78,7 +78,7 @@ const grille = "grid grid-cols-[repeat(auto-fill,minmax(190px,1fr))] gap-x-5 gap
 {/snippet}
 
 {#snippet cartes(liste: SpecMix[], variante: "carre" | "decennie")}
-  {#each liste as s (s.cle)}
+  {#each liste as s, idx (`${s.cle}:${idx}`)}
     <MixCard {libraryId} cle={s.cle} source={s.source} type={s.type} nom={s.nom} aide={s.aide} h={s.h}
              {variante} pre={s.pre} court={s.court} actions={actionsMix(s, libraryId)} />
   {/each}

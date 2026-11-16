@@ -34,12 +34,13 @@ pub fn open_mini_window(app: AppHandle, pinned: bool) -> Result<(), String> {
         // taille au fil de la session.
         .resizable(true)
         .decorations(false)
+        .transparent(true)
         .always_on_top(pinned)
         .skip_taskbar(true)
         // Créée cachée : l'interface l'affiche une fois peinte et dimensionnée, sans flash blanc.
         .visible(false)
-        // Même fond que la fenêtre principale (tauri.conf.json) : pas d'écran blanc au départ.
-        .background_color(tauri::window::Color(11, 13, 12, 255))
+        // Fond transparent RGBA pour permettre les silhouettes Pill (pochette ronde débordante) et Sleeve.
+        .background_color(tauri::window::Color(0, 0, 0, 0))
         .build()
         .map_err(|e| format!("création de la fenêtre mini : {e}"))?;
     log::info!("🪟  Fenêtre mini créée (épinglée : {pinned})");
@@ -81,24 +82,49 @@ pub fn close_mini_window(app: AppHandle) {
 fn wire_pointer_events(app: &AppHandle, window: &tauri::WebviewWindow) {
     use gtk::gdk::{EventMask, NotifyType};
     use gtk::prelude::{GtkWindowExt, WidgetExt, WidgetExtManual};
-    let Ok(gtk_window) = window.gtk_window() else {
-        return;
-    };
-    gtk_window.set_role("picture-in-picture");
-    gtk_window.add_events(EventMask::ENTER_NOTIFY_MASK | EventMask::LEAVE_NOTIFY_MASK);
-    let handle = app.clone();
-    gtk_window.connect_enter_notify_event(move |_, event| {
-        if event.detail() != NotifyType::Inferior {
-            let _ = handle.emit("window-pointer", true);
+
+    fn attach_crossing_signals(widget: &impl WidgetExt, app: &AppHandle) {
+        widget.add_events(EventMask::ENTER_NOTIFY_MASK | EventMask::LEAVE_NOTIFY_MASK);
+        if let Some(gdk_win) = widget.window() {
+            gdk_win.set_events(gdk_win.events() | EventMask::ENTER_NOTIFY_MASK | EventMask::LEAVE_NOTIFY_MASK);
         }
-        gtk::glib::Propagation::Proceed
-    });
-    let handle = app.clone();
-    gtk_window.connect_leave_notify_event(move |_, event| {
-        if event.detail() != NotifyType::Inferior {
+        let handle = app.clone();
+        widget.connect_enter_notify_event(move |_, event| {
+            if event.detail() != NotifyType::Inferior {
+                let _ = handle.emit("window-pointer", true);
+            }
+            gtk::glib::Propagation::Proceed
+        });
+        let handle = app.clone();
+        widget.connect_leave_notify_event(move |_, event| {
+            if event.detail() != NotifyType::Inferior {
+                let _ = handle.emit("window-pointer", false);
+            }
+            gtk::glib::Propagation::Proceed
+        });
+    }
+
+    if let Ok(gtk_window) = window.gtk_window() {
+        gtk_window.set_role("picture-in-picture");
+        attach_crossing_signals(&gtk_window, app);
+        let handle = app.clone();
+        gtk_window.connect_focus_out_event(move |_, _| {
             let _ = handle.emit("window-pointer", false);
-        }
-        gtk::glib::Propagation::Proceed
+            gtk::glib::Propagation::Proceed
+        });
+    }
+
+    let handle = app.clone();
+    let _ = window.with_webview(move |platform_webview| {
+        let wv = platform_webview.inner();
+        attach_crossing_signals(&wv, &handle);
+        let handle_realize = handle.clone();
+        wv.connect_realize(move |w| {
+            if let Some(gdk_win) = w.window() {
+                gdk_win.set_events(gdk_win.events() | EventMask::ENTER_NOTIFY_MASK | EventMask::LEAVE_NOTIFY_MASK);
+            }
+            let _ = handle_realize.emit("window-pointer", false);
+        });
     });
 }
 
