@@ -179,7 +179,9 @@ jobs:
         shell: bash
         run: |
           cd release-assets
-          sha256sum * > SHA256SUMS.txt
+          find . -type f ! -name SHA256SUMS.txt -print0 \
+            | sort -z \
+            | xargs -0 sha256sum > SHA256SUMS.txt
 
       - name: Publish GitHub Release
         uses: softprops/action-gh-release@v2
@@ -190,6 +192,6 @@ jobs:
           draft: false
           prerelease: false
           files: |
-            release-assets/*
+            release-assets/**/*
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
