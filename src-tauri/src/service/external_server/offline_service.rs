@@ -12,7 +12,7 @@ use tauri::{AppHandle, Emitter};
 
 use crate::core::subsonic::client::is_unreachable;
 use crate::core::subsonic::stream;
-use crate::service::external_server::track_service::{parse, start_download, stream_request};
+use crate::service::external_server::track_service::{find_cached_file, parse, start_download_in, stream_request};
 
 /// Un téléchargement à la fois : le réseau reste libre pour l'écoute.
 static RUNNING: AtomicBool = AtomicBool::new(false);
@@ -125,20 +125,26 @@ async fn run(app: &AppHandle, pool: &SqlitePool) -> usize {
 /// Télécharge le morceau dans le dossier hors ligne ; déjà dans le cache, il y est simplement déplacé.
 async fn fetch(pool: &SqlitePool, path: &str) -> Result<(PathBuf, u64), String> {
     let req = stream_request(pool, path).await?;
-    let file = stream::offline_dir().join(req.server_id.to_string()).join(&req.name);
-    if let Some(dir) = file.parent() {
-        std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
+    let dir = stream::offline_dir().join(req.server_id.to_string());
+    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    if let Some(existing) = find_cached_file(&dir, &req) {
+        let size = std::fs::metadata(&existing).map(|m| m.len()).map_err(|e| e.to_string())?;
+        return Ok((existing, size));
     }
-    let cached = stream::cache_dir().join(req.server_id.to_string()).join(&req.name);
-    if !file.exists() && cached.exists() && std::fs::rename(&cached, &file).is_err() {
-        std::fs::copy(&cached, &file).map_err(|e| e.to_string())?;
-    }
-    if !file.exists() {
-        let dl = start_download(pool, &req, &file, |_| {}).await?;
+    let cache_dir = stream::cache_dir().join(req.server_id.to_string());
+    let file = if let Some(cached) = find_cached_file(&cache_dir, &req) {
+        let target = dir.join(cached.file_name().unwrap_or_default());
+        if !target.exists() && std::fs::rename(&cached, &target).is_err() {
+            std::fs::copy(&cached, &target).map_err(|e| e.to_string())?;
+        }
+        target
+    } else {
+        let (dl, resolved) = start_download_in(pool, &req, &dir, |_| {}).await?;
         tokio::task::spawn_blocking(move || dl.wait_for(u64::MAX, Duration::from_secs(3600)))
             .await
             .map_err(|e| e.to_string())??;
-    }
+        resolved
+    };
     let size = std::fs::metadata(&file).map(|m| m.len()).map_err(|e| e.to_string())?;
     Ok((file, size))
 }

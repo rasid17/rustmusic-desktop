@@ -195,8 +195,8 @@ async fn run(pool: &SqlitePool, covers_dir: &Path, library_id: i64, token: &Task
     }
 
     // Disparus du serveur (synchronisation complète seulement) : retirés, avec les albums vidés.
-    // Pour Qobuz, on conserve les titres importés à la demande depuis la recherche du catalogue.
-    let removed = if cancelled || matches!(server, crate::core::remote::Backend::Qobuz(_)) {
+    // Pour Qobuz et TIDAL, on conserve les titres importés à la demande depuis la recherche du catalogue.
+    let removed = if cancelled || matches!(server, crate::core::remote::Backend::Qobuz(_) | crate::core::remote::Backend::Tidal(_)) {
         0
     } else {
         remove_missing(pool, library_id, &seen).await.unwrap_or(0)

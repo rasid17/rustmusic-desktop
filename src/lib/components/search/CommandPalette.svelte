@@ -27,6 +27,7 @@
   import type { Playlist } from "#lib/types/db/playlist/Playlist";
   import AiPlaylistPopin from "#lib/components/playlist/popin/AiPlaylistPopin.svelte";
   import QobuzCatalogPopin from "#lib/components/mediaServer/QobuzCatalogPopin.svelte";
+  import TidalCatalogPopin from "#lib/components/mediaServer/TidalCatalogPopin.svelte";
   import { serverStore } from "#lib/stores/mediaServer/mediaServer.store";
   import CoverImg from "#lib/components/ui/image/CoverImg.svelte";
   import CloudMark from "#lib/components/ui/status/CloudMark.svelte";
@@ -327,6 +328,26 @@
             popinStore.open(
               `Qobuz Hi-Res Catalog — ${s.name}`,
               QobuzCatalogPopin,
+              { server: s },
+              { size: "lg", icon: "material-symbols:high-quality-outline-rounded" },
+            );
+          },
+        }))),
+      ...($serverStore.servers
+        .filter((s) => s.kind === "tidal" && s.enabled)
+        .map((s) => ({
+          kind: "command" as const,
+          id: `tidal_catalog_${s.id}`,
+          category: "TIDAL Hi-Res",
+          title: `Search TIDAL Catalog (${s.name})`,
+          subtitle: "Search & stream TIDAL MAX tracks/albums up to 24-bit / 192 kHz Bit-Perfect",
+          icon: "material-symbols:high-quality-outline-rounded",
+          badge: "MAX Hi-Res",
+          badgeVariant: "purple" as const,
+          action: () => {
+            popinStore.open(
+              `TIDAL Hi-Res Catalog — ${s.name}`,
+              TidalCatalogPopin,
               { server: s },
               { size: "lg", icon: "material-symbols:high-quality-outline-rounded" },
             );

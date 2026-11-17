@@ -46,6 +46,7 @@ pub async fn apply_server_playlists(pool: &SqlitePool, server_id: i64, server: &
         Backend::Subsonic(s) => fetch(s, &username).await?,
         Backend::Jellyfin(j) => j.playlists().await?,
         Backend::Qobuz(q) => q.playlists().await?,
+        Backend::Tidal(t) => t.playlists().await?,
         Backend::Dlna(_) => return Ok(0),
     };
     for p in &remote {
@@ -147,6 +148,7 @@ pub async fn create_on_server(pool: &SqlitePool, server_id: i64, name: &str) -> 
         }
         Backend::Jellyfin(j) => j.create_playlist(name).await,
         Backend::Qobuz(q) => q.create_playlist(name).await,
+        Backend::Tidal(t) => t.create_playlist(name, &[]).await,
         Backend::Dlna(_) => Err("un serveur DLNA n'a pas de playlists".into()),
     }
 }

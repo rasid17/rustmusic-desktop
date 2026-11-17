@@ -1,6 +1,8 @@
 <script lang="ts">
   // Ajout d'un serveur (OpenSubsonic, Jellyfin ou DLNA) : connexion, puis choix des bibliothèques à ajouter.
+  import { onDestroy } from "svelte";
   import Icon from "@iconify/svelte";
+  import { openUrl } from "@tauri-apps/plugin-opener";
   import { t } from "#lib/i18n";
   import { popinStore } from "#lib/stores/ui/popin.store";
   import { serverStore, type ServerCredentials } from "#lib/stores/mediaServer/mediaServer.store";
@@ -12,17 +14,29 @@
   import ChoiceTile from "#lib/components/ui/input/ChoiceTile.svelte";
   import GhostButton from "#lib/components/ui/button/GhostButton.svelte";
   import DlnaFolderPicker from "#lib/components/mediaServer/DlnaFolderPicker.svelte";
-  import type { DlnaFound, ServerKind, ServerProbe } from "#lib/types/ui/mediaServer/MediaServer";
+  import type { DlnaFound, ServerKind, ServerProbe, TidalDeviceAuth } from "#lib/types/ui/mediaServer/MediaServer";
 
   let kind = $state<ServerKind>("subsonic");
   const jellyfin = $derived(kind === "jellyfin");
   const dlna = $derived(kind === "dlna");
   const qobuz = $derived(kind === "qobuz");
+  const tidal = $derived(kind === "tidal");
   let url = $state("");
   let username = $state("");
   let password = $state("");
   let apiKey = $state("");
   let avecCle = $state(false);
+  let tidalAuth = $state<TidalDeviceAuth | null>(null);
+  let tidalStarting = $state(false);
+  let pollTimer: ReturnType<typeof setInterval> | null = null;
+
+  function stopTidalPoll() {
+    if (pollTimer) {
+      clearInterval(pollTimer);
+      pollTimer = null;
+    }
+  }
+  onDestroy(stopTidalPoll);
 
   let probe = $state<ServerProbe | null>(null);
   let name = $state("");
@@ -46,6 +60,8 @@
   }
   function choose(k: ServerKind) {
     if (busy) return;
+    stopTidalPoll();
+    tidalAuth = null;
     kind = k;
     erreur = null;
     if (k === "dlna" && !recherche && trouves.length === 0) void discover();
@@ -54,11 +70,46 @@
 
   const credentials = (): ServerCredentials => ({
     kind,
-    url: qobuz ? "https://www.qobuz.com/api.json/0.2" : url.trim(),
+    url: qobuz ? "https://www.qobuz.com/api.json/0.2" : tidal ? "https://api.tidal.com/v1" : url.trim(),
     username: username.trim(),
-    password: avecCle ? null : password,
-    apiKey: avecCle ? apiKey.trim() : null,
+    password: tidal ? (avecCle ? password.trim() : password) : avecCle ? null : password,
+    apiKey: avecCle && apiKey.trim() ? apiKey.trim() : null,
   });
+
+  async function startTidalLogin() {
+    stopTidalPoll();
+    erreur = null;
+    tidalStarting = true;
+    try {
+      const customClient = avecCle && apiKey.trim() ? apiKey.trim() : null;
+      const auth = await serverStore.tidalDeviceStart(customClient);
+      tidalAuth = auth;
+      void openUrl(auth.verificationUriComplete).catch(() => {});
+      const intervalMs = Math.max(2000, (auth.interval || 2) * 1000);
+      pollTimer = setInterval(async () => {
+        if (!tidalAuth || tidalAuth.deviceCode !== auth.deviceCode) return;
+        try {
+          const poll = await serverStore.tidalDevicePoll(auth.deviceCode, customClient);
+          if (poll.status === "authorized" && poll.accessToken) {
+            stopTidalPoll();
+            tidalAuth = null;
+            username = poll.username || poll.userId || "tidal";
+            password = `tokens:${poll.accessToken}|${poll.refreshToken ?? ""}`;
+            avecCle = false;
+            await connect();
+          }
+        } catch (err) {
+          stopTidalPoll();
+          tidalAuth = null;
+          erreur = errorMessage(err);
+        }
+      }, intervalMs);
+    } catch (err) {
+      erreur = errorMessage(err);
+    } finally {
+      tidalStarting = false;
+    }
+  }
 
   async function connect() {
     erreur = null;
@@ -68,10 +119,12 @@
         ? avecCle
           ? !apiKey.trim()
           : !username.trim() || !password
-        : avecCle
-          ? !apiKey.trim() || (jellyfin && !username.trim())
-          : !username.trim() || (!jellyfin && !password);
-    if ((!qobuz && !url.trim()) || missing) {
+        : tidal
+          ? !password.trim()
+          : avecCle
+            ? !apiKey.trim() || (jellyfin && !username.trim())
+            : !username.trim() || (!jellyfin && !password);
+    if ((!qobuz && !tidal && !url.trim()) || missing) {
       erreur = $t("servers.fill_fields");
       return;
     }
@@ -127,6 +180,7 @@
         ["jellyfin", "Jellyfin", "servers.intro_jellyfin", true],
         ["dlna", "DLNA", "servers.intro_dlna", true],
         ["qobuz", "Qobuz", "Hi-Res 24-bit / 192 kHz · Bit-Perfect FLAC", false],
+        ["tidal", "TIDAL", "Hi-Res MAX 24-bit / 192 kHz · Bit-Perfect", false],
       ] as [value, title, desc, translated] (value)}
         <ChoiceTile
           title={value === "subsonic" ? $t(title as string) : (title as string)}
@@ -176,6 +230,16 @@
           </p>
         </div>
       </div>
+    {:else if tidal}
+      <div class="px-4 py-3 rounded-xl border border-cyan-500/30 bg-cyan-500/8 text-xs leading-relaxed text-(--rg-tx2) flex gap-2.5">
+        <Icon icon="material-symbols:high-quality-outline-rounded" width="18" class="shrink-0 mt-0.5 text-cyan-500" />
+        <div>
+          <p class="font-semibold text-(--rg-tx)">TIDAL Bit-Perfect MAX Streaming (up to 24-bit / 192 kHz)</p>
+          <p class="mt-0.5 text-(--rg-mu)">
+            Uncompressed FLAC and Hi-Res DASH FLAC streams are decoded directly by Symphonia and sent to your exclusive audio output without resampling.
+          </p>
+        </div>
+      </div>
     {:else}
       <FormField label={$t("servers.address")} for="srv_url" required={!dlna}>
         <FormInput id="srv_url" bind:value={url} mono placeholder={dlna ? "http://nas.local:8200" : jellyfin ? "http://nas.local:8096" : "https://music.example.com"} disabled={busy} oninput={() => (erreur = null)} onenter={connect} />
@@ -187,6 +251,60 @@
         <Icon icon="material-symbols:info-outline-rounded" width="15" class="shrink-0 mt-0.5" />
         {$t("servers.dlna_address_note")}
       </p>
+    {:else if tidal && !avecCle}
+      <div class="rounded-xl border border-(--rg-bd) bg-(--rg-s1) p-4 flex flex-col gap-3">
+        {#if !tidalAuth}
+          <div class="flex flex-wrap items-center justify-between gap-3">
+            <div>
+              <p class="text-sm font-semibold text-(--rg-tx)">Authorize via TIDAL Browser Login</p>
+              <p class="text-xs text-(--rg-mu) mt-0.5">Opens your browser to approve this device using OAuth 2.0 Device Flow.</p>
+            </div>
+            <GhostButton
+              icon={tidalStarting ? "material-symbols:sync-rounded" : "material-symbols:login-rounded"}
+              label={tidalStarting ? "Starting..." : "Sign in with TIDAL"}
+              busy={tidalStarting}
+              disabled={busy || tidalStarting}
+              onclick={startTidalLogin}
+            />
+          </div>
+        {:else}
+          <div class="flex flex-col gap-2.5">
+            <div class="flex flex-wrap items-center justify-between gap-2">
+              <div class="flex items-center gap-2 text-xs text-(--rg-tx2)">
+                <Icon icon="material-symbols:sync-rounded" width="16" class="animate-spin text-cyan-500" />
+                <span>Waiting for browser authorization...</span>
+              </div>
+              <button
+                type="button"
+                class="text-xs font-semibold text-(--rg-mu) hover:text-(--rg-tx) cursor-pointer"
+                onclick={() => { stopTidalPoll(); tidalAuth = null; }}
+              >
+                Cancel
+              </button>
+            </div>
+            <div class="flex flex-wrap items-center justify-between gap-3 px-3.5 py-2.5 rounded-lg bg-(--rg-s2)">
+              <div>
+                <p class="text-[11px] uppercase tracking-wider text-(--rg-mu)">Device Code</p>
+                <p class="text-lg font-mono font-bold tracking-widest text-(--rg-tx)">{tidalAuth.userCode}</p>
+              </div>
+              <GhostButton
+                icon="material-symbols:open-in-new-rounded"
+                label="Open TIDAL Login"
+                onclick={() => openUrl(tidalAuth!.verificationUriComplete)}
+              />
+            </div>
+          </div>
+        {/if}
+      </div>
+    {:else if tidal && avecCle}
+      <div class="grid gap-4 max-sm:grid-cols-1 grid-cols-2">
+        <FormField label="Access Token or Refresh Token" for="srv_tidal_tok" required>
+          <FormInput id="srv_tidal_tok" bind:value={password} mono password placeholder="Paste TIDAL OAuth token" disabled={busy} oninput={() => (erreur = null)} onenter={connect} />
+        </FormField>
+        <FormField label="Custom Client ID:Secret (optional)" for="srv_key">
+          <FormInput id="srv_key" bind:value={apiKey} mono password placeholder="Leave blank for default" disabled={busy} oninput={() => (erreur = null)} onenter={connect} />
+        </FormField>
+      </div>
     {:else if avecCle}
       <div class="grid gap-4 max-sm:grid-cols-1 {jellyfin || qobuz ? 'grid-cols-2' : ''}">
         {#if jellyfin || qobuz}
@@ -217,18 +335,26 @@
           {avecCle
             ? "Tip: You can paste your user_auth_token (or app_id:app_secret:user_auth_token) from an active play.qobuz.com session."
             : "Your password is only used to request a Qobuz session token; it is never stored on disk."}
+        {:else if tidal}
+          {avecCle
+            ? "Paste an existing TIDAL OAuth access_token or refresh_token. Refresh tokens renew automatically when expired."
+            : "OAuth Device Flow stores only session tokens and never asks for your TIDAL password."}
         {:else}
           {$t(`servers.${avecCle ? "api_key_note" : "password_note"}${jellyfin ? "_jellyfin" : ""}`)}
         {/if}
       </p>
-      <button type="button" onclick={() => { avecCle = !avecCle; erreur = null; }}
+      <button type="button" onclick={() => { stopTidalPoll(); tidalAuth = null; avecCle = !avecCle; erreur = null; }}
               class="text-xs font-semibold cursor-pointer text-(--rg-gtx) hover:underline underline-offset-2">
         {qobuz
           ? avecCle
             ? "Use email & password"
             : "Use token (user_auth_token)"
-          : avecCle
-            ? $t("servers.use_password")
+          : tidal
+            ? avecCle
+              ? "Use Browser OAuth Login"
+              : "Use token (access / refresh)"
+            : avecCle
+              ? $t("servers.use_password")
             : $t("servers.use_api_key")}
       </button>
     </div>
@@ -288,6 +414,6 @@
   submitLabel={probe ? $t("servers.add_libraries").replace("{n}", String(dlna ? dossiers.length : choisis.length)) : $t("servers.connect")}
   submitIcon={probe ? "material-symbols:add-rounded" : "material-symbols:link-rounded"}
   onsubmit={probe ? add : connect}
-  submitDisabled={!!probe && (dlna ? dossiers.length : choisis.length) === 0}
+  submitDisabled={(!probe && tidal && !avecCle && !password.trim()) || (!!probe && (dlna ? dossiers.length : choisis.length) === 0)}
   busy={busy}
 />

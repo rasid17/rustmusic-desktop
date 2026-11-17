@@ -2,7 +2,60 @@
 export type ServerLibrary = { id: number; name: string; remote_folder_id: string | null; total_tracks: number };
 
 /** La sorte de serveur. */
-export type ServerKind = "subsonic" | "jellyfin" | "dlna" | "qobuz";
+export type ServerKind = "subsonic" | "jellyfin" | "dlna" | "qobuz" | "tidal";
+
+/** OAuth 2.0 Device Code initiation payload for TIDAL sign-in. */
+export type TidalDeviceAuth = {
+  deviceCode: string;
+  userCode: string;
+  verificationUri: string;
+  verificationUriComplete: string;
+  expiresIn: number;
+  interval: number;
+};
+
+/** OAuth 2.0 Device Code polling status for TIDAL sign-in. */
+export type TidalDevicePoll = {
+  status: "pending" | "authorized" | string;
+  accessToken: string | null;
+  refreshToken: string | null;
+  username: string | null;
+  userId: string | null;
+  countryCode: string | null;
+};
+
+/** Album found in the global TIDAL catalog. */
+export type TidalSearchAlbum = {
+  id: string;
+  title: string;
+  artist: string;
+  year: number | null;
+  tracksCount: number;
+  coverUrl: string | null;
+  hires: boolean;
+  bitDepth: number | null;
+  samplingRate: number | null;
+};
+
+/** Track found in the global TIDAL catalog. */
+export type TidalSearchTrack = {
+  id: string;
+  albumId: string | null;
+  title: string;
+  artist: string;
+  album: string | null;
+  duration: number | null;
+  coverUrl: string | null;
+  hires: boolean;
+  bitDepth: number | null;
+  samplingRate: number | null;
+};
+
+/** Results returned by global TIDAL catalog search. */
+export type TidalSearchResults = {
+  albums: TidalSearchAlbum[];
+  tracks: TidalSearchTrack[];
+};
 
 /** Album trouvé dans le catalogue global Qobuz. */
 export type QobuzSearchAlbum = {

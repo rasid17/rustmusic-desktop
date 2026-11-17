@@ -289,7 +289,7 @@ pub async fn server_set_transcode(state: State<'_, AppState>, server_id: i64, fo
     let transcode = match format.as_deref() {
         None => None,
         Some("flac") => Some(("flac", bitrate.unwrap_or(96).clamp(44, 192))),
-        Some(f @ ("mp3" | "opus")) => Some((f, bitrate.unwrap_or(192).clamp(32, 320))),
+        Some(f @ ("mp3" | "opus" | "aac" | "m4a")) => Some((f, bitrate.unwrap_or(192).clamp(32, 320))),
         Some(other) => return Err(format!("format inconnu : {other}")),
     };
     ServerRepository::set_transcode(&state.pool, server_id, transcode).await.map_err(db)
@@ -345,6 +345,78 @@ pub async fn qobuz_import_track(
     let song = q.track_song(&track_id, favorite).await?;
     let mut views = sync_service::import_songs_on_demand(&app, &state.pool, server_id, &[song]).await?;
     views.pop().ok_or_else(|| "Unable to import this Qobuz track".into())
+}
+
+/// Memulai OAuth Device Authorization Flow TIDAL.
+#[tauri::command]
+pub async fn tidal_device_start(
+    api_key: Option<String>,
+) -> Result<crate::core::tidal::client::TidalDeviceAuth, String> {
+    crate::core::tidal::client::Server::device_code_start(api_key.as_deref()).await
+}
+
+/// Memeriksa status otorisasi perangkat TIDAL.
+#[tauri::command]
+pub async fn tidal_device_poll(
+    device_code: String,
+    api_key: Option<String>,
+) -> Result<crate::core::tidal::client::TidalDevicePoll, String> {
+    crate::core::tidal::client::Server::device_code_poll(&device_code, api_key.as_deref()).await
+}
+
+/// Pencarian album dan lagu di katalog global TIDAL.
+#[tauri::command]
+pub async fn tidal_search(
+    state: State<'_, AppState>,
+    server_id: i64,
+    query: String,
+) -> Result<crate::core::tidal::catalog::TidalSearchResults, String> {
+    match saved_server(&state, server_id).await? {
+        Backend::Tidal(t) => t.search_catalog(&query, 24).await,
+        _ => Err("This server is not a TIDAL account".into()),
+    }
+}
+
+/// Impor seluruh album TIDAL ke perpustakaan lokal secara on-demand.
+#[tauri::command]
+pub async fn tidal_import_album(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    server_id: i64,
+    album_id: String,
+    favorite: bool,
+) -> Result<Vec<crate::mapper::library::track::track_list_item_view::TrackListView>, String> {
+    let Backend::Tidal(t) = saved_server(&state, server_id).await? else {
+        return Err("This server is not a TIDAL account".into());
+    };
+    if favorite {
+        let _ = t.set_favorite_album(&album_id, true).await;
+    }
+    let songs = t.album_songs(&album_id).await?;
+    sync_service::import_songs_on_demand(&app, &state.pool, server_id, &songs).await
+}
+
+/// Impor satu lagu TIDAL ke perpustakaan lokal secara on-demand.
+#[tauri::command]
+pub async fn tidal_import_track(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    server_id: i64,
+    track_id: String,
+    favorite: bool,
+) -> Result<crate::mapper::library::track::track_list_item_view::TrackListView, String> {
+    let Backend::Tidal(t) = saved_server(&state, server_id).await? else {
+        return Err("This server is not a TIDAL account".into());
+    };
+    if favorite {
+        let _ = t.set_favorite(&track_id, true).await;
+    }
+    let mut song = t.track_song(&track_id).await?;
+    if favorite {
+        song.starred = true;
+    }
+    let mut views = sync_service::import_songs_on_demand(&app, &state.pool, server_id, &[song]).await?;
+    views.pop().ok_or_else(|| "Unable to import this TIDAL track".into())
 }
 
 /// Épingle ou non les playlists du serveur dans la barre latérale.

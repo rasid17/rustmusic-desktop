@@ -11,7 +11,18 @@ import { liked } from "#lib/stores/playlist/like.store";
 import { playlistStore } from "#lib/stores/playlist/playlist.store";
 import { offlineStore } from "#lib/stores/mediaServer/offline.store";
 import { recent } from "#lib/stores/recent/recent.store";
-import type { DlnaFolder, DlnaFound, MusicFolder, QobuzSearchResults, ServerEntry, ServerKind, ServerProbe } from "#lib/types/ui/mediaServer/MediaServer";
+import type {
+  DlnaFolder,
+  DlnaFound,
+  MusicFolder,
+  QobuzSearchResults,
+  ServerEntry,
+  ServerKind,
+  ServerProbe,
+  TidalDeviceAuth,
+  TidalDevicePoll,
+  TidalSearchResults,
+} from "#lib/types/ui/mediaServer/MediaServer";
 import type { SourceDeFile } from "#lib/mapper/queue/mapQueueTrack";
 import { remoteServerId } from "#lib/types/db/library/Library";
 
@@ -120,6 +131,32 @@ export const serverStore = {
   /** Importe un morceau Qobuz dans la bibliothèque locale et renvoie la piste prête à être jouée. */
   async qobuzImportTrack(serverId: number, trackId: string, favorite = false): Promise<SourceDeFile> {
     const track = await invoke<SourceDeFile>("qobuz_import_track", { serverId, trackId, favorite });
+    await afterChange();
+    return track;
+  },
+
+  /** Starts TIDAL OAuth 2.0 Device Authorization Flow. */
+  tidalDeviceStart: (apiKey?: string | null) =>
+    invoke<TidalDeviceAuth>("tidal_device_start", { apiKey: apiKey?.trim() || null }),
+
+  /** Polls TIDAL OAuth 2.0 Device Authorization status. */
+  tidalDevicePoll: (deviceCode: string, apiKey?: string | null) =>
+    invoke<TidalDevicePoll>("tidal_device_poll", { deviceCode, apiKey: apiKey?.trim() || null }),
+
+  /** Searches albums and tracks across the global TIDAL catalog. */
+  tidalSearch: (serverId: number, query: string) =>
+    invoke<TidalSearchResults>("tidal_search", { serverId, query }),
+
+  /** Imports a full TIDAL album on-demand and returns playable queue items. */
+  async tidalImportAlbum(serverId: number, albumId: string, favorite = false): Promise<SourceDeFile[]> {
+    const tracks = await invoke<SourceDeFile[]>("tidal_import_album", { serverId, albumId, favorite });
+    await afterChange();
+    return tracks;
+  },
+
+  /** Imports a single TIDAL track on-demand and returns the playable queue item. */
+  async tidalImportTrack(serverId: number, trackId: string, favorite = false): Promise<SourceDeFile> {
+    const track = await invoke<SourceDeFile>("tidal_import_track", { serverId, trackId, favorite });
     await afterChange();
     return track;
   },

@@ -188,6 +188,7 @@ pub mod qobuz {
     pub mod catalog;
     pub mod client;
 }
+pub mod tidal;
 pub mod remote;
 /// Serveurs DLNA du réseau (UPnP ContentDirectory) comme bibliothèques distantes.
 pub mod dlna_client {

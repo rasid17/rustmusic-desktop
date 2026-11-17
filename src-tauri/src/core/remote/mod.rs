@@ -5,6 +5,8 @@ use serde::{Deserialize, Serialize};
 use crate::core::dlna_client::client::Server as Dlna;
 use crate::core::jellyfin::client::Server as Jellyfin;
 use crate::core::qobuz::client::{Server as Qobuz, API_BASE as QOBUZ_API_BASE, DEFAULT_APP_ID, DEFAULT_APP_SECRET};
+use crate::core::tidal::client::{Server as Tidal, API_BASE as TIDAL_API_BASE};
+use crate::core::tidal::catalog::TidalStream;
 use crate::core::subsonic::client::{Auth, Server as Subsonic};
 pub use crate::core::subsonic::catalog::RemoteSong;
 pub use crate::core::subsonic::client::{MusicFolder, ServerInfo};
@@ -42,6 +44,7 @@ pub enum Kind {
     Jellyfin,
     Dlna,
     Qobuz,
+    Tidal,
 }
 
 impl Kind {
@@ -51,6 +54,7 @@ impl Kind {
             Kind::Jellyfin => "jellyfin",
             Kind::Dlna => "dlna",
             Kind::Qobuz => "qobuz",
+            Kind::Tidal => "tidal",
         }
     }
 
@@ -59,6 +63,7 @@ impl Kind {
             "jellyfin" => Kind::Jellyfin,
             "dlna" => Kind::Dlna,
             "qobuz" => Kind::Qobuz,
+            "tidal" => Kind::Tidal,
             _ => Kind::Subsonic,
         }
     }
@@ -80,6 +85,13 @@ pub enum Backend {
     Jellyfin(Jellyfin),
     Dlna(Dlna),
     Qobuz(Qobuz),
+    Tidal(Tidal),
+}
+
+/// Source de téléchargement d'un morceau distant (URL simple ou séquence DASH fMP4).
+pub enum RemoteStream {
+    Url { url: reqwest::Url, ext: Option<&'static str> },
+    Segments { urls: Vec<String>, ext: &'static str },
 }
 
 impl Backend {
@@ -111,6 +123,11 @@ impl Backend {
             Kind::Qobuz => {
                 let (s, info) = Qobuz::connect(url, username, password, api_key).await?;
                 Ok((Backend::Qobuz(s), info))
+            }
+            Kind::Tidal => {
+                let t = Tidal::connect(url, username, password.unwrap_or(""), api_key).await?;
+                let info = t.ping().await?;
+                Ok((Backend::Tidal(t), info))
             }
         }
     }
@@ -148,6 +165,18 @@ impl Backend {
                 };
                 Backend::Qobuz(Qobuz { base, app_id, app_secret, token, user_id })
             }
+            Kind::Tidal => {
+                let access = stored.token.filter(|t| !t.is_empty()).ok_or_else(missing)?;
+                let refresh = stored.salt.unwrap_or_default();
+                let api_key = stored.api_key.unwrap_or_default();
+                let stored_uid = stored.user_id.unwrap_or_default();
+                let base = if url.is_empty() || url.starts_with("tidal://") {
+                    TIDAL_API_BASE.to_string()
+                } else {
+                    url
+                };
+                Backend::Tidal(Tidal::from_parts(&base, &username, &access, &refresh, &api_key, &stored_uid))
+            }
         })
     }
 
@@ -171,6 +200,15 @@ impl Backend {
                 api_key: Some(q.app_id.clone()),
                 user_id: Some(q.user_id.clone()),
             },
+            Backend::Tidal(t) => Stored {
+                token: Some(t.effective_access_token()),
+                salt: {
+                    let r = t.effective_refresh_token();
+                    (!r.is_empty()).then_some(r)
+                },
+                api_key: Some(t.api_key_string()),
+                user_id: Some(t.stored_user_id()),
+            },
         }
     }
 
@@ -180,6 +218,7 @@ impl Backend {
             Backend::Jellyfin(_) => Kind::Jellyfin,
             Backend::Dlna(_) => Kind::Dlna,
             Backend::Qobuz(_) => Kind::Qobuz,
+            Backend::Tidal(_) => Kind::Tidal,
         }
     }
 
@@ -189,6 +228,7 @@ impl Backend {
             Backend::Jellyfin(j) => &j.base,
             Backend::Dlna(d) => &d.location,
             Backend::Qobuz(q) => &q.base,
+            Backend::Tidal(t) => &t.base,
         }
     }
 
@@ -203,6 +243,7 @@ impl Backend {
             Backend::Jellyfin(j) => j.ping().await,
             Backend::Dlna(d) => d.ping().await,
             Backend::Qobuz(q) => q.ping().await,
+            Backend::Tidal(t) => t.ping().await,
         }
     }
 
@@ -212,6 +253,7 @@ impl Backend {
             Backend::Jellyfin(j) => j.music_folders().await,
             Backend::Dlna(d) => Ok(d.folders("0").await?.into_iter().map(|f| MusicFolder { id: f.id, name: f.name }).collect()),
             Backend::Qobuz(q) => q.music_folders().await,
+            Backend::Tidal(t) => t.music_folders().await,
         }
     }
 
@@ -235,6 +277,7 @@ impl Backend {
             Backend::Jellyfin(j) => j.all_songs(folder_id, progress).await,
             Backend::Dlna(d) => d.all_songs(folder_id, progress).await,
             Backend::Qobuz(q) => q.all_songs(folder_id, progress).await,
+            Backend::Tidal(t) => t.all_songs(folder_id, progress).await,
         }
     }
 
@@ -244,6 +287,7 @@ impl Backend {
             Backend::Jellyfin(j) => j.cover_art(id, size).await,
             Backend::Dlna(d) => d.cover_art(id).await,
             Backend::Qobuz(q) => q.cover_art(id, size).await,
+            Backend::Tidal(t) => t.cover_art(id, Some(size)).await.ok(),
         }
     }
 
@@ -261,6 +305,24 @@ impl Backend {
             Backend::Jellyfin(j) => j.stream_url(song_id, transcode),
             Backend::Dlna(d) => d.stream_url(song_id).await,
             Backend::Qobuz(q) => q.stream_url(song_id, transcode).await,
+            Backend::Tidal(t) => t.stream_url(song_id, transcode).await,
+        }
+    }
+
+    /// Résout une cible de téléchargement complète (URL directe ou segmen DASH fMP4).
+    pub async fn stream_target(&self, song_id: &str, transcode: Option<(&str, i64)>) -> Result<RemoteStream, String> {
+        match self {
+            Backend::Tidal(t) => match t.resolve_stream(song_id, transcode).await? {
+                TidalStream::Direct { url, ext } => {
+                    let parsed = reqwest::Url::parse(&url).map_err(|e| format!("Invalid TIDAL stream URL: {e}"))?;
+                    Ok(RemoteStream::Url { url: parsed, ext: Some(ext) })
+                }
+                TidalStream::Segments { urls, ext } => Ok(RemoteStream::Segments { urls, ext }),
+            },
+            _ => {
+                let url = self.stream_url(song_id, transcode).await?;
+                Ok(RemoteStream::Url { url, ext: None })
+            }
         }
     }
 
@@ -269,7 +331,7 @@ impl Backend {
         match self {
             Backend::Subsonic(s) => s.lyrics(song_id, structured, artist, title).await,
             Backend::Jellyfin(j) => j.lyrics(song_id).await,
-            Backend::Dlna(_) | Backend::Qobuz(_) => Ok(None),
+            Backend::Dlna(_) | Backend::Qobuz(_) | Backend::Tidal(_) => Ok(None),
         }
     }
 }

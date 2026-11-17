@@ -42,7 +42,7 @@ use crate::commands::lyrics_command::{get_lyrics, refresh_lyrics, save_lyrics};
 use crate::commands::dlna_command::{dlna_get_settings, dlna_status, dlna_start, dlna_stop, dlna_update_settings};
 use crate::commands::platform_command::{get_platform_features, set_autostart_portal};
 use crate::commands::server_command::{
-    get_servers, servers_check, server_sync, server_add, server_add_libraries, server_browse, server_discover, server_folders, server_probe, server_remove, server_rename, server_set_enabled, server_set_pin_playlists, server_set_transcode, offline_list, offline_add, offline_remove, qobuz_search, qobuz_import_album, qobuz_import_track,
+    get_servers, servers_check, server_sync, server_add, server_add_libraries, server_browse, server_discover, server_folders, server_probe, server_remove, server_rename, server_set_enabled, server_set_pin_playlists, server_set_transcode, offline_list, offline_add, offline_remove, qobuz_search, qobuz_import_album, qobuz_import_track, tidal_device_start, tidal_device_poll, tidal_search, tidal_import_album, tidal_import_track,
 };
 use crate::commands::podcast_command::{
     get_podcast, get_podcast_episode, get_podcast_episodes, get_podcasts, podcast_refresh, podcast_search, podcast_set_all_played,
@@ -1018,6 +1018,11 @@ pub async fn run() {
             qobuz_search,
             qobuz_import_album,
             qobuz_import_track,
+            tidal_device_start,
+            tidal_device_poll,
+            tidal_search,
+            tidal_import_album,
+            tidal_import_track,
             server_remove,
             get_podcast_latest,
             podcast_download,

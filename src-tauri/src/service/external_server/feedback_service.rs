@@ -169,6 +169,26 @@ async fn deliver(pool: &SqlitePool, server: &Backend, target: &str, feedback: &F
             Feedback::PlaylistDelete => q.delete_playlist(target).await,
             Feedback::Rating(_) | Feedback::Scrobble(_) | Feedback::NowPlaying => Ok(()),
         },
+        Backend::Tidal(t) => match feedback {
+            Feedback::Star(on) => t.set_favorite(target, *on).await,
+            Feedback::PlaylistSongs(local) => {
+                let Some(ids) = playlist_song_ids(pool, *local).await? else { return Ok(()) };
+                t.sync_playlist_tracks(target, &ids).await
+            }
+            Feedback::PlaylistInfo(local) => {
+                let row: Option<(String, Option<String>)> = sqlx::query_as("SELECT name, description FROM playlists WHERE id = ?")
+                    .bind(local)
+                    .fetch_optional(pool)
+                    .await
+                    .map_err(|e| e.to_string())?;
+                match row {
+                    Some((name, _)) => t.rename_playlist(target, &name).await,
+                    None => Ok(()),
+                }
+            }
+            Feedback::PlaylistDelete => t.delete_playlist(target).await,
+            Feedback::Rating(_) | Feedback::Scrobble(_) | Feedback::NowPlaying => Ok(()),
+        },
         // DLNA : rien ne remonte au serveur.
         Backend::Dlna(_) => Ok(()),
     }

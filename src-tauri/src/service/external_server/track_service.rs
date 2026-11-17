@@ -51,6 +51,8 @@ pub(crate) struct StreamRequest {
     pub duration: Option<f64>,
     /// Taille estimée d'un flux MP3 transcodé (durée × débit), qui n'annonce pas la sienne.
     pub size_hint: Option<u64>,
+    /// Akun TIDAL dapat mengembalikan segmen DASH `.mp4` atau AAC `.m4a`.
+    pub is_tidal: bool,
 }
 
 /// Original par défaut ; transcodé si le serveur est réglé ainsi (fichier distinct).
@@ -94,26 +96,62 @@ pub(crate) async fn stream_request(pool: &SqlitePool, logical: &str) -> Result<S
         }
         _ => None,
     };
-    Ok(StreamRequest { server_id, song_id: song_id.to_string(), transcode, name, dsd, duration, size_hint })
+    let is_tidal = view.kind == "tidal";
+    Ok(StreamRequest { server_id, song_id: song_id.to_string(), transcode, name, dsd, duration, size_hint, is_tidal })
 }
 
-/// Lance (ou rejoint) le téléchargement du morceau vers `file`.
-pub(crate) async fn start_download(
+/// Cherche le fichier déjà mis en cache ou hors ligne (en incluant `.mp4`/`.m4a` pour TIDAL DASH/AAC).
+pub(crate) fn find_cached_file(dir: &Path, req: &StreamRequest) -> Option<std::path::PathBuf> {
+    let primary = dir.join(&req.name);
+    if primary.exists() {
+        return Some(primary);
+    }
+    if req.is_tidal {
+        for ext in ["mp4", "m4a", "flac"] {
+            let alt = primary.with_extension(ext);
+            if alt.exists() {
+                return Some(alt);
+            }
+        }
+    }
+    None
+}
+
+/// Lance (ou rejoint) le téléchargement du morceau dans `dir`, en ajustant l'extension réelle du flux.
+pub(crate) async fn start_download_in(
     pool: &SqlitePool,
     req: &StreamRequest,
-    file: &Path,
+    dir: &Path,
     on_done: impl FnOnce(Result<std::path::PathBuf, String>) + Send + 'static,
-) -> Result<std::sync::Arc<download::Download>, String> {
-    if let Some(dl) = download::get(file) {
-        return Ok(dl);
-    }
+) -> Result<(std::sync::Arc<download::Download>, std::path::PathBuf), String> {
     let server = ServerRepository::server(pool, req.server_id).await?;
-    let url = server.stream_url(&req.song_id, req.transcode.as_ref().map(|(f, k)| (f.as_str(), *k))).await?;
-    let dl = download::start(url.as_str(), file.to_path_buf(), req.duration, on_done);
-    if let Some(bytes) = req.size_hint {
-        dl.set_size_hint(bytes);
+    let target = server
+        .stream_target(&req.song_id, req.transcode.as_ref().map(|(f, k)| (f.as_str(), *k)))
+        .await?;
+    let mut file = dir.join(&req.name);
+    match target {
+        crate::core::remote::RemoteStream::Url { url, ext } => {
+            if let Some(e) = ext {
+                file = file.with_extension(e);
+            }
+            if let Some(dl) = download::get(&file) {
+                return Ok((dl, file));
+            }
+            let dl = download::start(url.as_str(), file.clone(), req.duration, on_done);
+            if let Some(bytes) = req.size_hint {
+                dl.set_size_hint(bytes);
+            }
+            Ok((dl, file))
+        }
+        crate::core::remote::RemoteStream::Segments { urls, ext } => {
+            file = file.with_extension(ext);
+            if let Some(dl) = download::get(&file) {
+                return Ok((dl, file));
+            }
+            let dl = download::start_segments(urls, file.clone(), req.duration, on_done);
+            Ok((dl, file))
+        }
     }
-    Ok(dl)
 }
 
 /// Prépare la lecture d'un morceau distant : gardé hors ligne, pris dans le cache, sinon téléchargé
@@ -130,13 +168,13 @@ pub async fn prepare(pool: &SqlitePool, path: &Path, wait: Wait) -> Result<(), S
         Wait::Start if req.dsd => Wait::Whole,
         other => other,
     };
-    let file = stream::cache_dir().join(req.server_id.to_string()).join(&req.name);
-    if file.exists() {
+    let dir = stream::cache_dir().join(req.server_id.to_string());
+    if let Some(file) = find_cached_file(&dir, &req) {
         stream::touch(&file);
         stream::register(path, file);
         return Ok(());
     }
-    let dl = start_download(pool, &req, &file, |result| {
+    let (dl, file) = start_download_in(pool, &req, &dir, |result| {
         if result.is_ok() {
             tauri::async_runtime::spawn_blocking(stream::prune);
         }

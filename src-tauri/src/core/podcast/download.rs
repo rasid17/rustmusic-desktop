@@ -277,6 +277,98 @@ pub fn start(
     dl
 }
 
+/// Télécharge une séquence ordonnée de segmen (ex. DASH fMP4 TIDAL Hi-Res) dans un seul fichier.
+pub fn start_segments(
+    urls: Vec<String>,
+    path: PathBuf,
+    duration_hint: Option<f64>,
+    on_done: impl FnOnce(Result<PathBuf, String>) + Send + 'static,
+) -> Arc<Download> {
+    let mut map = active().lock().unwrap_or_else(|e| e.into_inner());
+    if let Some(d) = map.get(&path) {
+        return d.clone();
+    }
+    let mut part = path.clone().into_os_string();
+    part.push(".part");
+    let dl = Arc::new(Download {
+        path: path.clone(),
+        part: PathBuf::from(part),
+        url: Mutex::new(None),
+        cancelled: AtomicBool::new(false),
+        // Les segmen DASH sont lus séquentiellement sans requêtes HTTP Range partielles.
+        ranges: AtomicBool::new(false),
+        blocks: Mutex::new(HashMap::new()),
+        duration_hint,
+        size_hint: AtomicU64::new(0),
+        progress: Mutex::new(Progress::default()),
+        changed: Condvar::new(),
+    });
+    map.insert(path.clone(), dl.clone());
+    drop(map);
+
+    let task = dl.clone();
+    tauri::async_runtime::spawn(async move {
+        let result = fetch_segments_into(&task, &urls).await;
+        if let Err(e) = &result {
+            if task.cancelled.load(Ordering::Relaxed) {
+                log::debug!("[téléchargement] annulé (segments)");
+            } else {
+                log::warn!("[téléchargement] interrompu (segments) : {e}");
+            }
+            let _ = std::fs::remove_file(&task.part);
+            task.update(|p| p.error = Some(e.clone()));
+        }
+        active().lock().unwrap_or_else(|e| e.into_inner()).remove(&task.path);
+        on_done(result.map(|_| task.path.clone()));
+    });
+    dl
+}
+
+async fn fetch_segments_into(dl: &Arc<Download>, urls: &[String]) -> Result<(), String> {
+    if urls.is_empty() {
+        return Err("aucun segment audio à télécharger".into());
+    }
+    if let Some(dir) = dl.part.parent() {
+        tokio::fs::create_dir_all(dir).await.map_err(|e| e.to_string())?;
+    }
+    let mut file = tokio::fs::File::create(&dl.part).await.map_err(|e| e.to_string())?;
+    for (idx, url) in urls.iter().enumerate() {
+        if dl.cancelled.load(Ordering::Relaxed) {
+            return Err("téléchargement annulé".into());
+        }
+        let mut resp = client()
+            .get(url)
+            .timeout(Duration::from_secs(60))
+            .send()
+            .await
+            .map_err(|e| format!("segment {} injoignable : {e}", idx + 1))?;
+        if !resp.status().is_success() {
+            return Err(format!("segment {} refusé : HTTP {}", idx + 1, resp.status().as_u16()));
+        }
+        loop {
+            if dl.cancelled.load(Ordering::Relaxed) {
+                return Err("téléchargement annulé".into());
+            }
+            let chunk = tokio::time::timeout(STALL_TIMEOUT, resp.chunk())
+                .await
+                .map_err(|_| "téléchargement segment figé".to_string())?
+                .map_err(|e| format!("téléchargement segment interrompu : {e}"))?;
+            let Some(chunk) = chunk else { break };
+            file.write_all(&chunk).await.map_err(|e| e.to_string())?;
+            let n = chunk.len() as u64;
+            dl.update(|p| p.written += n);
+        }
+    }
+    file.flush().await.map_err(|e| e.to_string())?;
+    drop(file);
+    tokio::fs::rename(&dl.part, &dl.path).await.map_err(|e| e.to_string())?;
+    dl.update(|p| {
+        p.done = true;
+        p.total = Some(p.written);
+    });
+    Ok(())
+}
+
 async fn fetch_into(dl: &Arc<Download>, url: &str) -> Result<(), String> {
     if let Some(dir) = dl.part.parent() {
         tokio::fs::create_dir_all(dir).await.map_err(|e| e.to_string())?;
