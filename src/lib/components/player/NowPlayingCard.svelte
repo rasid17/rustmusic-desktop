@@ -118,7 +118,7 @@ let glowClasses = $derived(
                     {currentTrack.title}
                 </span>
                 <span class="truncate text-[12px] font-medium {artistClasses}">
-                    {currentTrack.artist ?? "Artiste inconnu"}
+                    {currentTrack.artist || $t("common.unknown_artist")}
                 </span>
             </div>
 

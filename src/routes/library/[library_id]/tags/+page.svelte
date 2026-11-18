@@ -392,7 +392,8 @@
     <div class="shrink-0 flex items-center gap-1 px-5 py-2 border-y border-(--rg-bd) bg-(--rg-carte)/40">
       <span class="mr-1.5 text-[13px] whitespace-nowrap text-(--rg-mu)">
         {#if selectedCount > 0}
-          {@html $t("workshop.scope").replace("{n}", `<b class="font-bold text-(--rg-tx)">${selectedCount}</b>`).replace("{total}", String(readable.length))}
+          {@const scopeParts = $t("workshop.scope").replace("{total}", String(readable.length)).split("{n}")}
+          {scopeParts[0]}<b class="font-bold text-(--rg-tx)">{selectedCount}</b>{scopeParts.slice(1).join("{n}")}
         {:else}
           {$t("workshop.no_selection")}
         {/if}

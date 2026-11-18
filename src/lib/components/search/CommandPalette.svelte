@@ -2,6 +2,7 @@
   import { tick } from "svelte";
   import { fade, scale } from "svelte/transition";
   import Icon from "@iconify/svelte";
+  import { t } from "#lib/i18n";
   import { goto } from "$app/navigation";
   import { invoke } from "@tauri-apps/api/core";
   import { commandPaletteStore } from "#lib/stores/ui/commandPalette.store";
@@ -161,12 +162,12 @@
       importsTermines.update((n) => n + 1);
       toasts.push({
         type: "success",
-        title: "Synced Folders",
-        message: `${dir.name}: ${!dir.is_active ? "Enabled" : "Disabled"}`,
+        title: $t("command_palette.cat_folders"),
+        message: `${dir.name}: ${$t(!dir.is_active ? "command_palette.folder_enabled" : "command_palette.folder_disabled")}`,
       });
       await loadContextData();
     } catch (e) {
-      toasts.push({ type: "error", title: "Failed to Update Folder", message: String(e) });
+      toasts.push({ type: "error", title: $t("command_palette.folder_update_error"), message: String(e) });
     }
   }
 
@@ -177,12 +178,12 @@
       await applyFolderProfile(libId, profile.activeDirIds);
       toasts.push({
         type: "success",
-        title: "Listening Mode",
-        message: `Profile "${profile.name}" applied`,
+        title: $t("command_palette.listening_mode"),
+        message: $t("command_palette.profile_applied").replace("{name}", profile.name),
       });
       await loadContextData();
     } catch (e) {
-      toasts.push({ type: "error", title: "Failed to Apply Profile", message: String(e) });
+      toasts.push({ type: "error", title: $t("command_palette.profile_apply_error"), message: String(e) });
     }
   }
 
@@ -193,12 +194,12 @@
       await applyFolderProfile(libId, dirs.map((d) => d.id));
       toasts.push({
         type: "success",
-        title: "Listening Mode",
-        message: "All folders enabled",
+        title: $t("command_palette.listening_mode"),
+        message: $t("command_palette.all_folders_enabled"),
       });
       await loadContextData();
     } catch (e) {
-      toasts.push({ type: "error", title: "Failed to Enable Folders", message: String(e) });
+      toasts.push({ type: "error", title: $t("command_palette.all_folders_error"), message: String(e) });
     }
   }
 
@@ -207,14 +208,14 @@
       await invoke("set_device", { deviceName });
       toasts.push({
         type: "success",
-        title: "Audio Output",
-        message: `Output device switched to: ${deviceName}`,
+        title: $t("command_palette.audio_output"),
+        message: $t("command_palette.audio_switched").replace("{device}", deviceName),
       });
     } catch (e) {
       toasts.push({
         type: "error",
-        title: "Audio Output",
-        message: `Failed to switch output device: ${String(e)}`,
+        title: $t("command_palette.audio_output"),
+        message: $t("command_palette.audio_switch_error").replace("{err}", String(e)),
       });
     }
   }
@@ -222,20 +223,21 @@
   // Prepares command entries
   const allCommandEntries = $derived.by((): PaletteCommand[] => {
     const libId = libraryId;
+    const tr = $t;
     const list: PaletteCommand[] = [
       // AI Playlist
       {
         kind: "command",
         id: "ai_new_playlist",
-        category: "AI Playlist",
-        title: "AI Playlist Generator: Create New Playlist...",
-        subtitle: "Generate an automatic playlist from a smart prompt",
+        category: tr("command_palette.cat_ai"),
+        title: tr("command_palette.ai_title"),
+        subtitle: tr("command_palette.ai_subtitle"),
         icon: "mynaui:sparkles",
         badge: "AI",
         badgeVariant: "purple",
         action: () => {
           popinStore.open(
-            "AI Playlist Generator",
+            tr("command_palette.ai_popin_title"),
             AiPlaylistPopin,
             { libraryId: libId },
             { size: "lg", icon: "mynaui:sparkles" }
@@ -246,68 +248,68 @@
       {
         kind: "command",
         id: "playback_toggle_play",
-        category: "Playback",
-        title: "Play / Pause",
-        subtitle: "Play or pause the current track",
+        category: tr("command_palette.cat_playback"),
+        title: tr("command_palette.play_pause"),
+        subtitle: tr("command_palette.play_pause_sub"),
         icon: "lucide:play",
         action: () => playerService.handleTogglePlay(),
       },
       {
         kind: "command",
         id: "playback_next",
-        category: "Playback",
-        title: "Next Track",
-        subtitle: "Skip to the next track",
+        category: tr("command_palette.cat_playback"),
+        title: tr("command_palette.next_track"),
+        subtitle: tr("command_palette.next_track_sub"),
         icon: "lucide:skip-forward",
         action: () => playerService.nextTrack(),
       },
       {
         kind: "command",
         id: "playback_prev",
-        category: "Playback",
-        title: "Previous Track",
-        subtitle: "Return to the previous track",
+        category: tr("command_palette.cat_playback"),
+        title: tr("command_palette.prev_track"),
+        subtitle: tr("command_palette.prev_track_sub"),
         icon: "lucide:skip-back",
         action: () => playerService.prevTrack(),
       },
       {
         kind: "command",
         id: "playback_shuffle",
-        category: "Playback",
-        title: "Smart Shuffle: Toggle / Reshuffle Queue",
-        subtitle: $queueState.isShuffled ? "Reshuffle the current queue" : "Enable fair smart shuffle",
+        category: tr("command_palette.cat_playback"),
+        title: tr("command_palette.shuffle_title"),
+        subtitle: $queueState.isShuffled ? tr("command_palette.shuffle_sub_on") : tr("command_palette.shuffle_sub_off"),
         icon: "lucide:shuffle",
         action: async () => {
           await queueState.toggleShuffle();
           toasts.push({
             type: "info",
-            title: "Smart Shuffle",
-            message: !$queueState.isShuffled ? "Smart Shuffle enabled" : "Smart Shuffle disabled",
+            title: tr("command_palette.shuffle_toast"),
+            message: !$queueState.isShuffled ? tr("command_palette.shuffle_on") : tr("command_palette.shuffle_off"),
           });
         },
       },
       {
         kind: "command",
         id: "playback_clear_queue",
-        category: "Playback",
-        title: "Clear Queue",
-        subtitle: "Clear the entire playback queue",
+        category: tr("command_palette.cat_playback"),
+        title: tr("command_palette.clear_queue"),
+        subtitle: tr("command_palette.clear_queue_sub"),
         icon: "lucide:trash-2",
         action: async () => {
           await queueState.clear();
           toasts.push({
             type: "info",
-            title: "Queue",
-            message: "Playback queue cleared",
+            title: tr("command_palette.queue_toast"),
+            message: tr("command_palette.queue_cleared"),
           });
         },
       },
       {
         kind: "command",
         id: "playback_mini_player",
-        category: "Playback",
-        title: "Toggle Mini Player (Picture-in-Picture)",
-        subtitle: "Open or close the mini player window",
+        category: tr("command_palette.cat_playback"),
+        title: tr("command_palette.mini_player"),
+        subtitle: tr("command_palette.mini_player_sub"),
         icon: "lucide:picture-in-picture-2",
         action: () => {
           void toggleMiniPlayer();
@@ -318,15 +320,15 @@
         .map((s) => ({
           kind: "command" as const,
           id: `qobuz_catalog_${s.id}`,
-          category: "Qobuz Hi-Res",
-          title: `Search Qobuz Catalog (${s.name})`,
-          subtitle: "Search & stream Qobuz tracks/albums up to 24-bit / 192 kHz Bit-Perfect",
+          category: tr("command_palette.cat_qobuz"),
+          title: tr("command_palette.qobuz_search_title").replace("{name}", s.name),
+          subtitle: tr("command_palette.qobuz_search_sub"),
           icon: "material-symbols:high-quality-outline-rounded",
           badge: "Hi-Res FLAC",
           badgeVariant: "purple" as const,
           action: () => {
             popinStore.open(
-              `Qobuz Hi-Res Catalog — ${s.name}`,
+              tr("command_palette.qobuz_catalog_title").replace("{name}", s.name),
               QobuzCatalogPopin,
               { server: s },
               { size: "lg", icon: "material-symbols:high-quality-outline-rounded" },
@@ -338,15 +340,15 @@
         .map((s) => ({
           kind: "command" as const,
           id: `tidal_catalog_${s.id}`,
-          category: "TIDAL Hi-Res",
-          title: `Search TIDAL Catalog (${s.name})`,
-          subtitle: "Search & stream TIDAL MAX tracks/albums up to 24-bit / 192 kHz Bit-Perfect",
+          category: tr("command_palette.cat_tidal"),
+          title: tr("command_palette.tidal_search_title").replace("{name}", s.name),
+          subtitle: tr("command_palette.tidal_search_sub"),
           icon: "material-symbols:high-quality-outline-rounded",
           badge: "MAX Hi-Res",
           badgeVariant: "purple" as const,
           action: () => {
             popinStore.open(
-              `TIDAL Hi-Res Catalog — ${s.name}`,
+              tr("command_palette.tidal_catalog_title").replace("{name}", s.name),
               TidalCatalogPopin,
               { server: s },
               { size: "lg", icon: "material-symbols:high-quality-outline-rounded" },
@@ -357,9 +359,9 @@
       {
         kind: "command",
         id: "nav_theme",
-        category: "Appearance & Navigation",
-        title: "Toggle Theme (Light / Dark)",
-        subtitle: "Switch between dark and light mode",
+        category: tr("command_palette.cat_appearance"),
+        title: tr("command_palette.theme_title"),
+        subtitle: tr("command_palette.theme_sub"),
         icon: "lucide:sun-moon",
         action: async () => {
           const isDark = document.documentElement.classList.contains("dark");
@@ -367,17 +369,17 @@
           await settingsStore.set("theme", nextTheme);
           toasts.push({
             type: "info",
-            title: "Theme",
-            message: isDark ? "Light mode enabled" : "Dark mode enabled",
+            title: tr("command_palette.theme_toast"),
+            message: isDark ? tr("command_palette.theme_light") : tr("command_palette.theme_dark"),
           });
         },
       },
       {
         kind: "command",
         id: "nav_playlists",
-        category: "Appearance & Navigation",
-        title: "Go to Playlists",
-        subtitle: "Open all playlists",
+        category: tr("command_palette.cat_appearance"),
+        title: tr("command_palette.playlists_title"),
+        subtitle: tr("command_palette.playlists_sub"),
         icon: "lucide:list-music",
         action: () => {
           goto("/playlists");
@@ -386,9 +388,9 @@
       {
         kind: "command",
         id: "nav_favorites",
-        category: "Appearance & Navigation",
-        title: "Go to Favorites",
-        subtitle: "Open your liked tracks",
+        category: tr("command_palette.cat_appearance"),
+        title: tr("command_palette.favorites_title"),
+        subtitle: tr("command_palette.favorites_sub"),
         icon: "lucide:heart",
         action: () => {
           goto("/playlist/liked");
@@ -397,9 +399,9 @@
       {
         kind: "command",
         id: "nav_settings",
-        category: "Appearance & Navigation",
-        title: "Go to Settings",
-        subtitle: "Open application settings",
+        category: tr("command_palette.cat_appearance"),
+        title: tr("command_palette.settings_title"),
+        subtitle: tr("command_palette.settings_sub"),
         icon: "lucide:settings",
         action: () => {
           goto("/settings/general");
@@ -408,9 +410,9 @@
       {
         kind: "command",
         id: "nav_mobile_remote",
-        category: "Appearance & Navigation",
-        title: "Mobile Remote: Phone & Tablet QR Code / Settings",
-        subtitle: "Control playback and browse library from your phone over Wi-Fi",
+        category: tr("command_palette.cat_appearance"),
+        title: tr("command_palette.remote_title"),
+        subtitle: tr("command_palette.remote_sub"),
         icon: "lucide:smartphone",
         badge: "LAN",
         badgeVariant: "green",
@@ -421,9 +423,9 @@
       {
         kind: "command",
         id: "nav_podcasts",
-        category: "Appearance & Navigation",
-        title: "Go to Podcasts",
-        subtitle: "Open podcast channels and episodes",
+        category: tr("command_palette.cat_appearance"),
+        title: tr("command_palette.podcasts_title"),
+        subtitle: tr("command_palette.podcasts_sub"),
         icon: "lucide:podcast",
         action: () => {
           goto("/podcasts");
@@ -437,9 +439,9 @@
         list.push({
           kind: "command",
           id: "folder_profile_all",
-          category: "Listening Mode (Folders)",
-          title: "Folder Profile: Enable All Folders",
-          subtitle: `Enable all ${dirs.length} synced folders`,
+          category: tr("command_palette.cat_profiles"),
+          title: tr("command_palette.profile_all_title"),
+          subtitle: tr("command_palette.profile_all_sub").replace("{n}", String(dirs.length)),
           icon: "lucide:folder-check",
           action: () => handleActivateAllDirs(),
         });
@@ -449,9 +451,9 @@
         list.push({
           kind: "command",
           id: `folder_profile_${prof.id}`,
-          category: "Listening Mode (Folders)",
-          title: `Folder Profile: ${prof.name}`,
-          subtitle: `${prof.activeDirIds.length} active folders`,
+          category: tr("command_palette.cat_profiles"),
+          title: tr("command_palette.profile_title").replace("{name}", prof.name),
+          subtitle: tr("command_palette.profile_sub").replace("{n}", String(prof.activeDirIds.length)),
           icon: "lucide:folder-heart",
           action: () => handleApplyProfile(prof),
         });
@@ -462,11 +464,13 @@
         list.push({
           kind: "command",
           id: `dir_${dir.id}`,
-          category: "Synced Folders",
-          title: `Folder: ${dir.is_active ? "Disable" : "Enable"} ${dir.name}`,
+          category: tr("command_palette.cat_folders"),
+          title: tr("command_palette.folder_toggle_title")
+            .replace("{action}", tr(dir.is_active ? "command_palette.folder_disable" : "command_palette.folder_enable"))
+            .replace("{name}", dir.name),
           subtitle: dir.path,
           icon: dir.is_active ? "lucide:folder-minus" : "lucide:folder-plus",
-          badge: dir.is_active ? "Active" : "Inactive",
+          badge: tr(dir.is_active ? "command_palette.folder_active" : "command_palette.folder_inactive"),
           badgeVariant: dir.is_active ? "green" : "gray",
           action: () => handleToggleDir(dir),
         });
@@ -475,9 +479,9 @@
       list.push({
         kind: "command",
         id: "dir_manage",
-        category: "Synced Folders",
-        title: "Manage Synced Folders...",
-        subtitle: "Open library folder settings",
+        category: tr("command_palette.cat_folders"),
+        title: tr("command_palette.folder_manage_title"),
+        subtitle: tr("command_palette.folder_manage_sub"),
         icon: "lucide:folder-cog",
         action: () => {
           goto(`/library/${libId}/folders`);
@@ -490,9 +494,9 @@
       list.push({
         kind: "command",
         id: `device_${device}`,
-        category: "Audio Output",
-        title: `Audio Output: ${device}`,
-        subtitle: "Switch audio output device",
+        category: tr("command_palette.cat_audio"),
+        title: tr("command_palette.device_title").replace("{device}", device),
+        subtitle: tr("command_palette.device_sub"),
         icon: "lucide:speaker",
         action: () => handleSetDevice(device),
       });
@@ -531,6 +535,7 @@
   const flattenedEntries = $derived.by((): PaletteEntry[] => {
     const list: PaletteEntry[] = [];
     const q = query.trim();
+    const tr = $t;
 
     // 1. Check for AI prompt prefix
     const aiPrompt = isAiPrompt(q);
@@ -539,15 +544,15 @@
       list.push({
         kind: "command",
         id: "ai_custom_generate",
-        category: "AI Playlist",
-        title: `Generate AI Playlist: "${aiPrompt}"`,
-        subtitle: "Create an automatic playlist with this smart prompt",
+        category: tr("command_palette.cat_ai"),
+        title: tr("command_palette.ai_custom_title").replace("{prompt}", aiPrompt),
+        subtitle: tr("command_palette.ai_custom_subtitle"),
         icon: "mynaui:sparkles",
         badge: "AI",
         badgeVariant: "purple",
         action: () => {
           popinStore.open(
-            "AI Playlist Generator",
+            tr("command_palette.ai_popin_title"),
             AiPlaylistPopin,
             { libraryId: libId, initialPrompt: aiPrompt },
             { size: "lg", icon: "mynaui:sparkles" }
@@ -563,7 +568,7 @@
         list.push({
           kind: "playlist",
           id: `pl_${pl.id}`,
-          category: "Playlists",
+          category: tr("command_palette.cat_playlists"),
           playlist: pl,
         });
       }
@@ -573,7 +578,7 @@
         list.push({
           kind: "track",
           id: `track_${hit.id}`,
-          category: "Tracks",
+          category: tr("command_palette.cat_tracks"),
           hit,
         });
       }
@@ -583,7 +588,7 @@
         list.push({
           kind: "album",
           id: `album_${hit.id}`,
-          category: "Albums",
+          category: tr("command_palette.cat_albums"),
           hit,
         });
       }
@@ -593,7 +598,7 @@
         list.push({
           kind: "artist",
           id: `artist_${hit.id}`,
-          category: "Artists",
+          category: tr("command_palette.cat_artists"),
           hit,
         });
       }
@@ -723,7 +728,7 @@
       executeEntry({
         kind: r.result_type as "album" | "artist",
         id: r.id,
-        category: r.result_type === "album" ? "Albums" : "Artists",
+        category: r.result_type === "album" ? $t("command_palette.cat_albums") : $t("command_palette.cat_artists"),
         hit: { ...r, versions: hit.versions },
       });
     }
@@ -752,7 +757,7 @@
         // Shift+Enter: Play Next on a track
         if (item.kind === "track" && item.hit.path) {
           void queueState.addTrack(toQueueTrack(item.hit));
-          toasts.push({ type: "success", title: "Added to play next", message: item.hit.title });
+          toasts.push({ type: "success", title: $t("command_palette.toast_added_next"), message: item.hit.title });
           close();
         } else {
           executeEntry(item);
@@ -764,7 +769,7 @@
         // Ctrl+Enter / Meta+Enter: Enqueue on a track, keeps palette open
         if (item.kind === "track" && item.hit.path) {
           void queueState.enqueue(toQueueTrack(item.hit));
-          toasts.push({ type: "success", title: "Added to queue", message: item.hit.title });
+          toasts.push({ type: "success", title: $t("command_palette.toast_added_queue"), message: item.hit.title });
         } else {
           executeEntry(item);
         }
@@ -807,7 +812,7 @@
     <div
       role="dialog"
       aria-modal="true"
-      aria-label="Command Palette"
+      aria-label={$t("command_palette.aria_label")}
       class="flex flex-col w-full max-w-2xl max-h-[75vh] rounded-2xl overflow-hidden shadow-2xl shadow-black/50
              border border-neutral-200/80 dark:border-neutral-800
              bg-white dark:bg-[#121614] text-neutral-900 dark:text-neutral-100"
@@ -832,7 +837,7 @@
           bind:value={query}
           oninput={handleInput}
           onkeydown={handleKeydown}
-          placeholder="Type a command ('>') or search tracks, albums, artists, playlists..."
+          placeholder={$t("command_palette.search_placeholder")}
           class="flex-1 bg-transparent border-none outline-none text-sm text-neutral-900 dark:text-neutral-100
                  placeholder:text-neutral-400 dark:placeholder:text-neutral-500"
           autocomplete="off"
@@ -845,7 +850,7 @@
             onclick={() => { query = ""; handleInput(); }}
             class="p-1 rounded-md text-neutral-400 hover:text-neutral-600 dark:hover:text-neutral-200
                    hover:bg-neutral-200/60 dark:hover:bg-neutral-800 transition-colors"
-            title="Clear search"
+            title={$t("command_palette.clear_search")}
           >
             <Icon icon="lucide:x" class="w-4 h-4" />
           </button>
@@ -870,19 +875,19 @@
           <div class="flex flex-col items-center justify-center py-12 px-4 text-center">
             {#if isSearching}
               <Icon icon="lucide:loader-2" class="w-8 h-8 animate-spin text-emerald-500 mb-2" />
-              <p class="text-sm text-neutral-500 dark:text-neutral-400">Searching library...</p>
+              <p class="text-sm text-neutral-500 dark:text-neutral-400">{$t("command_palette.searching")}</p>
             {:else if query.trim().length >= 2}
               <Icon icon="lucide:search-x" class="w-8 h-8 text-neutral-400 mb-2" />
               <p class="text-sm font-medium text-neutral-700 dark:text-neutral-300">
-                No results for "{query}"
+                {$t("command_palette.no_results").replace("{query}", query)}
               </p>
               <p class="text-xs text-neutral-400 dark:text-neutral-500 mt-1">
-                Type <span class="font-mono bg-neutral-100 dark:bg-neutral-800 px-1 py-0.5 rounded">&gt;</span> to view all quick commands
+                {$t("command_palette.hint_commands_prefix")} <span class="font-mono bg-neutral-100 dark:bg-neutral-800 px-1 py-0.5 rounded">&gt;</span> {$t("command_palette.hint_commands_suffix")}
               </p>
             {:else}
               <Icon icon="lucide:command" class="w-8 h-8 text-neutral-400 mb-2" />
               <p class="text-sm font-medium text-neutral-700 dark:text-neutral-300">
-                No matching actions or commands
+                {$t("command_palette.no_commands")}
               </p>
             {/if}
           </div>
@@ -985,7 +990,7 @@
                   </p>
                 {:else if item.kind === "playlist"}
                   <p class="text-xs text-neutral-500 dark:text-neutral-400 truncate">
-                    {item.playlist.track_count ?? 0} tracks
+                    {$t("command_palette.tracks_count").replace("{n}", String(item.playlist.track_count ?? 0))}
                   </p>
                 {/if}
               </div>
@@ -998,14 +1003,14 @@
                 >
                   <button
                     type="button"
-                    title="Play Next (Shift+Enter)"
+                    title={$t("command_palette.play_next_tooltip")}
                     onclick={(e) => {
                       e.stopPropagation();
                       if (item.hit.path) {
                         void queueState.addTrack(toQueueTrack(item.hit));
                         toasts.push({
                           type: "success",
-                          title: "Added to play next",
+                          title: $t("command_palette.toast_added_next"),
                           message: item.hit.title,
                         });
                         close();
@@ -1017,14 +1022,14 @@
                   </button>
                   <button
                     type="button"
-                    title="Add to Queue (Ctrl+Enter)"
+                    title={$t("command_palette.enqueue_tooltip")}
                     onclick={(e) => {
                       e.stopPropagation();
                       if (item.hit.path) {
                         void queueState.enqueue(toQueueTrack(item.hit));
                         toasts.push({
                           type: "success",
-                          title: "Added to queue",
+                          title: $t("command_palette.toast_added_queue"),
                           message: item.hit.title,
                         });
                       }
@@ -1068,23 +1073,23 @@
       >
         <div class="flex items-center gap-3 flex-wrap">
           <span class="inline-flex items-center gap-1">
-            <kbd class="px-1.5 py-0.5 rounded bg-neutral-200 dark:bg-neutral-800 font-mono text-[10px]">↑↓</kbd> Navigate
+            <kbd class="px-1.5 py-0.5 rounded bg-neutral-200 dark:bg-neutral-800 font-mono text-[10px]">↑↓</kbd> {$t("command_palette.footer_nav")}
           </span>
           <span class="inline-flex items-center gap-1">
-            <kbd class="px-1.5 py-0.5 rounded bg-neutral-200 dark:bg-neutral-800 font-mono text-[10px]">↵</kbd> Play / Run
+            <kbd class="px-1.5 py-0.5 rounded bg-neutral-200 dark:bg-neutral-800 font-mono text-[10px]">↵</kbd> {$t("command_palette.footer_run")}
           </span>
           <span class="inline-flex items-center gap-1">
-            <kbd class="px-1.5 py-0.5 rounded bg-neutral-200 dark:bg-neutral-800 font-mono text-[10px]">⇧↵</kbd> Play Next
+            <kbd class="px-1.5 py-0.5 rounded bg-neutral-200 dark:bg-neutral-800 font-mono text-[10px]">⇧↵</kbd> {$t("command_palette.footer_next")}
           </span>
           <span class="inline-flex items-center gap-1">
-            <kbd class="px-1.5 py-0.5 rounded bg-neutral-200 dark:bg-neutral-800 font-mono text-[10px]">⌃↵</kbd> Enqueue
+            <kbd class="px-1.5 py-0.5 rounded bg-neutral-200 dark:bg-neutral-800 font-mono text-[10px]">⌃↵</kbd> {$t("command_palette.footer_enqueue")}
           </span>
           <span class="inline-flex items-center gap-1">
-            <kbd class="px-1.5 py-0.5 rounded bg-neutral-200 dark:bg-neutral-800 font-mono text-[10px]">&gt;</kbd> Quick Commands
+            <kbd class="px-1.5 py-0.5 rounded bg-neutral-200 dark:bg-neutral-800 font-mono text-[10px]">&gt;</kbd> {$t("command_palette.footer_cmds")}
           </span>
         </div>
         <span class="inline-flex items-center gap-1 shrink-0">
-          <kbd class="px-1.5 py-0.5 rounded bg-neutral-200 dark:bg-neutral-800 font-mono text-[10px]">Esc</kbd> Close
+          <kbd class="px-1.5 py-0.5 rounded bg-neutral-200 dark:bg-neutral-800 font-mono text-[10px]">Esc</kbd> {$t("command_palette.footer_close")}
         </span>
       </div>
     </div>

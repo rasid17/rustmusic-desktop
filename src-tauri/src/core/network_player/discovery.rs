@@ -119,9 +119,18 @@ pub(crate) async fn search(wait: Duration, types: &[&str]) -> Vec<String> {
                 tokio::time::sleep(Duration::from_millis(150)).await;
             }
             let mut buf = vec![0u8; 2048];
-            while let Ok(Ok((n, _))) = tokio::time::timeout_at(deadline, socket.recv_from(&mut buf)).await {
-                if let Some(location) = parse_search_response(&String::from_utf8_lossy(&buf[..n]), &types) {
-                    found.push(location);
+            loop {
+                match tokio::time::timeout_at(deadline, socket.recv_from(&mut buf)).await {
+                    Ok(Ok((n, _))) => {
+                        if let Some(location) = parse_search_response(&String::from_utf8_lossy(&buf[..n]), &types) {
+                            found.push(location);
+                        }
+                    }
+                    // Windows Winsock retourne WSAECONNRESET (10054) sur socket UDP après ICMP Unreachable.
+                    Ok(Err(e)) if matches!(e.kind(), std::io::ErrorKind::ConnectionReset | std::io::ErrorKind::WouldBlock | std::io::ErrorKind::Interrupted) || e.raw_os_error() == Some(10054) => {
+                        continue;
+                    }
+                    _ => break,
                 }
             }
             found
@@ -142,9 +151,10 @@ pub(crate) async fn search(wait: Duration, types: &[&str]) -> Vec<String> {
 /// Socket UDP liée à une carte, multicast sortant par cette même carte.
 pub(super) fn open_socket(ip: Ipv4Addr) -> std::io::Result<UdpSocket> {
     let socket = Socket::new(Domain::IPV4, Type::DGRAM, Some(Protocol::UDP))?;
+    // Lier avant set_multicast_if_v4 : sous Windows Winsock, lier d'abord évite WSAEINVAL.
+    socket.bind(&SocketAddrV4::new(ip, 0).into())?;
     socket.set_multicast_if_v4(&ip)?;
     socket.set_multicast_ttl_v4(2)?;
-    socket.bind(&SocketAddrV4::new(ip, 0).into())?;
     socket.set_nonblocking(true)?;
     UdpSocket::from_std(socket.into())
 }

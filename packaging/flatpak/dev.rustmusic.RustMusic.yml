@@ -17,8 +17,12 @@ finish-args:
   - --socket=wayland
   - --socket=fallback-x11
   - --device=dri
-  # Lecture partagée par le serveur son (PipeWire ou PulseAudio).
+  # Lecture partagée par le serveur son (PipeWire ou PulseAudio), plus accès direct ALSA/DAC USB et réservation D-Bus.
   - --socket=pulseaudio
+  - --device=all
+  - --talk-name=org.freedesktop.ReserveDevice1.*
+  # Persistance de l'ancienne configuration audio (.rust-music/config.json).
+  - --persist=.rust-music
   # Serveur DLNA, lecteurs UPnP et AirPlay, télécommande d'ampli, MusicBrainz, paroles.
   - --share=network
   # Bibliothèques musicales : dossier Musique et disques externes, en écriture pour les tags.

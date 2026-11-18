@@ -9,6 +9,7 @@
   import { listen } from "@tauri-apps/api/event";
   import { invoke } from "@tauri-apps/api/core";
   import { detectOS } from "#lib/helper/tools/osDetection";
+  import { subscribeCoverFallback } from "#lib/helper/tools/coverHelper";
   import LoadingRing from "#lib/components/ui/loader/LoadingRing.svelte";
   import CoverImg from "#lib/components/ui/image/CoverImg.svelte";
   import PlayerProgressBar from "./PlayerProgressBar.svelte";
@@ -55,7 +56,19 @@
   const enAttente = $derived(isPlaying && !!$player?.isPreparing);
   const trackTitle = $derived(displayTitle(audioTags?.title, pathFile, $t("common.unknown_title")));
   const artistName = $derived(audioTags?.artist || $t("common.unknown_artist"));
-  const coverSrc = $derived(audioTags?.attached_images?.[0]?.image_src ?? null);
+  const attachedCover = $derived(audioTags?.attached_images?.[0]?.image_src ?? null);
+  const currentQueueCover = $derived($queueState.tracks[$queueState.currentIndex]?.cover ?? null);
+  let fallbackCover = $state<string | null>(null);
+  $effect(() => {
+    if (!hasTrack || attachedCover) {
+      fallbackCover = null;
+      return;
+    }
+    return subscribeCoverFallback(currentQueueCover, "1x", (url) => {
+      fallbackCover = url;
+    });
+  });
+  const coverSrc = $derived(attachedCover || fallbackCover);
   const duration = $derived($player?.duration ?? 0);
   const jsPosition = $derived($player?.jsPosition ?? 0);
   const remaining = $derived(Math.max(0, duration - jsPosition));
@@ -154,6 +167,7 @@
 
   onDestroy(() => {
     pillSpinner.destroy();
+    if (hintTimer) clearTimeout(hintTimer);
   });
 
   // ─── Molette de souris -> Volume (±5 %) + bulle d'indication ───
@@ -437,8 +451,8 @@
     <button
       type="button"
       class="{btnSize} flex items-center justify-center rounded-full cursor-pointer {baseCls}"
-      title="Switch style ({$miniPlayerStyle === 'pill' ? 'Pill' : $miniPlayerStyle === 'sleeve' ? 'Sleeve' : 'Classic'})"
-      aria-label="Switch style"
+      title={$t("mini.style_switch").replace("{style}", $t($miniPlayerStyle === "pill" ? "mini.style_pill" : $miniPlayerStyle === "sleeve" ? "mini.style_sleeve" : "mini.style_classic"))}
+      aria-label={$t("mini.style_switch_aria")}
       onclick={() => void cycleMiniStyle()}
     >
       <Icon
@@ -550,7 +564,7 @@
               src={hasTrack && coverSrc ? coverSrc : SANS_POCHETTE}
               alt=""
               class="w-full h-full object-cover"
-              onerror={(e) => ((e.currentTarget as HTMLImageElement).src = SANS_POCHETTE)}
+              onerror={(e) => { const img = e.currentTarget as HTMLImageElement; if (!img.src.endsWith(SANS_POCHETTE)) img.src = SANS_POCHETTE; }}
             />
           </div>
           <!-- Reflet spéculaire fixe sur la pochette ronde + anneau central discret -->
@@ -572,6 +586,7 @@
             src={coverSrc}
             alt=""
             class="pointer-events-none absolute inset-x-0 -top-12 w-full h-56 object-cover blur-3xl opacity-30 scale-125"
+            onerror={(e) => { const img = e.currentTarget as HTMLImageElement; if (!img.src.endsWith(SANS_POCHETTE)) img.src = SANS_POCHETTE; }}
           />
         {/if}
 
@@ -708,7 +723,7 @@
           src={hasTrack && coverSrc ? coverSrc : SANS_POCHETTE}
           alt=""
           class="pointer-events-none absolute inset-0 w-full h-full object-cover"
-          onerror={(e) => ((e.currentTarget as HTMLImageElement).src = SANS_POCHETTE)}
+          onerror={(e) => { const img = e.currentTarget as HTMLImageElement; if (!img.src.endsWith(SANS_POCHETTE)) img.src = SANS_POCHETTE; }}
         />
 
         <!-- Bande givrée dynamique au bas (MiniFrostBand : copie floutée + masque dégradé + voile de contraste) -->
@@ -720,6 +735,7 @@
             src={hasTrack && coverSrc ? coverSrc : SANS_POCHETTE}
             alt=""
             class="w-full h-[420px] object-cover object-bottom blur-2xl scale-115 brightness-75 saturate-140"
+            onerror={(e) => { const img = e.currentTarget as HTMLImageElement; if (!img.src.endsWith(SANS_POCHETTE)) img.src = SANS_POCHETTE; }}
           />
           <div class="absolute inset-0 bg-gradient-to-t from-black/82 via-black/58 to-transparent"></div>
         </div>
@@ -866,9 +882,9 @@
         <div class="flex items-center gap-1.5">
           <div class="flex-1 grid grid-cols-3 gap-1 p-0.5 rounded-xl bg-white/10 border border-white/12">
             {#each [
-              { id: "classic", label: "Classic", icon: "ph:cards-duotone" },
-              { id: "pill", label: "Pill", icon: "ph:vinyl-record-duotone" },
-              { id: "sleeve", label: "Sleeve", icon: "ph:disc-duotone" },
+              { id: "classic", label: $t("mini.style_classic"), icon: "ph:cards-duotone" },
+              { id: "pill", label: $t("mini.style_pill"), icon: "ph:vinyl-record-duotone" },
+              { id: "sleeve", label: $t("mini.style_sleeve"), icon: "ph:disc-duotone" },
             ] as st (st.id)}
               {@const activeStyle = $miniPlayerStyle === st.id}
               <button
@@ -895,9 +911,9 @@
         <!-- Sous-variantes Classic (Card | Bar | Large | Micro) -->
         <div class="grid grid-cols-4 gap-1">
           {#each [
-            { id: "card", label: "Card", icon: "material-symbols-light:crop-portrait-outline" },
-            { id: "bar", label: "Bar", icon: "material-symbols-light:crop-16-9-outline" },
-            { id: "large", label: "Cover", icon: "material-symbols-light:image-outline-rounded" },
+            { id: "card", label: $t("mini.layout_card"), icon: "material-symbols-light:crop-portrait-outline" },
+            { id: "bar", label: $t("mini.layout_bar"), icon: "material-symbols-light:crop-16-9-outline" },
+            { id: "large", label: $t("mini.layout_cover"), icon: "material-symbols-light:image-outline-rounded" },
           ] as lay (lay.id)}
             {@const isCur = $miniPlayerStyle === "classic" && $miniClassicLayout === lay.id}
             <button
@@ -917,7 +933,7 @@
             onclick={() => { menuOpen = false; void enterMicroPlayer(); }}
           >
             <Icon icon="ph:picture-in-picture" width="13" />
-            <span>Micro</span>
+            <span>{$t("mini.layout_micro")}</span>
           </button>
         </div>
 

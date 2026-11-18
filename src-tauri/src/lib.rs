@@ -225,76 +225,49 @@ fn install_panic_hook() {
     }));
 }
 
-/// Configure the WebKitGTK / GTK rendering pipeline before Tauri starts.
-///
-/// On Linux without a real GPU (VM, container) or with finicky stacks (old
-/// WebKitGTK 2.40 on Debian 12, KDE Wayland + AMD Mesa, SteamOS), the default
-/// GPU path can freeze the window, emit `gtk_widget_get_scale_factor failed`
-/// floods, or abort with `EGL_BAD_PARAMETER`. We fall back to software
-/// rendering in those cases so the app stays usable.
-///
-/// Resolution order :
-///   1. `RUSTMUSIC_RENDER` env var (gpu | software | auto) — escape hatch
-///      usable even when the app can't boot far enough to show the UI.
-///   2. Crash sentinel : a previous GPU boot that never painted the UI
-///      switches us to software and persists `gpu_boot_failed` (see
-///      [`crate::core::gpu_sentinel`]).
-///   3. The persisted `render_mode` setting (force-gpu / force-software).
-///   4. Auto : software on VMs, SteamOS, or remembered GPU failure ;
-///      GPU everywhere else.
-///
-/// IMPORTANT: must be called before the Tauri builder runs, otherwise the
-/// env vars are read too late by WebKitGTK / GTK.
 #[cfg(target_os = "linux")]
-async fn configure_render_pipeline(app_state: &AppState, db_mode: crate::core::render_mode::RenderMode) {
+struct EarlyRenderBoot {
+    force_software: bool,
+    prev_attempts: u32,
+    previous_gpu_boot_failed: bool,
+}
+
+static MINIMIZE_TO_TRAY: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+pub fn set_minimize_to_tray(enabled: bool) {
+    MINIMIZE_TO_TRAY.store(enabled, std::sync::atomic::Ordering::Relaxed);
+}
+
+/// Phase synchrone et mono-fil d'exécution : lit les préférences en cache disque et
+/// applique les variables d'environnement GTK/WebKitGTK avant tout thread secondaire
+/// ou création du runtime Tokio / Tauri Builder.
+#[cfg(target_os = "linux")]
+fn prepare_linux_render_env_early() -> EarlyRenderBoot {
     use crate::core::gpu_sentinel;
     use crate::core::render_mode::RenderMode;
-    use crate::repository::settings::settings_repository::SettingsRepository;
 
-    // Indépendant du mode de rendu : un cache de polices d'une autre version
-    // bloque WebKit en GPU comme en logiciel.
     crate::core::fontconfig_cache::remove_mismatched_caches();
 
     let env_mode = RenderMode::from_env();
     if let Some(m) = env_mode {
         log::info!("🖥  RUSTMUSIC_RENDER override : {}", m.as_str());
     }
-    let mode = env_mode.unwrap_or(db_mode);
+    let early = crate::core::render_mode::load_early_prefs();
+    let mode = env_mode.unwrap_or(early.mode);
     let src = if env_mode.is_some() { "env" } else { "user" };
 
-    // Consume the crash sentinel : if consecutive unconfirmed GPU boots reached
-    // the threshold (or an explicit WebKit crash was recorded), persist the
-    // failure so Auto stays on software afterwards. A single interrupted boot
-    // (e.g. `pkill` during startup) increments the counter instead of locking
-    // the user into software mode.
     let prev_attempts = gpu_sentinel::previous_attempts();
     let previous_gpu_boot_failed = prev_attempts >= gpu_sentinel::MAX_UNCONFIRMED_BOOTS;
-    gpu_sentinel::disarm();
-
-    let remembered_failure = SettingsRepository::get(&app_state.pool, gpu_sentinel::GPU_BOOT_FAILED_KEY)
-        .await
-        .ok()
-        .flatten()
-        .as_deref()
-        == Some("1");
 
     let (force_software, reason): (bool, String) = if env_mode == Some(RenderMode::ForceGpu) {
-        // Explicit per-launch GPU test : bypass sentinel and remembered flag.
         (false, "env override (force GPU)".to_string())
     } else if mode == RenderMode::ForceSoftware {
         (true, format!("{} override (force software)", src))
     } else if previous_gpu_boot_failed {
-        let _ = SettingsRepository::set(&app_state.pool, gpu_sentinel::GPU_BOOT_FAILED_KEY, "1").await;
-        if mode == RenderMode::ForceGpu {
-            // A forced-GPU config that crashes would loop forever — demote it
-            // back to Auto so the remembered failure takes effect.
-            let _ = SettingsRepository::set(&app_state.pool, "render_mode", RenderMode::Auto.as_str()).await;
-            log::warn!("🖥  Forced GPU mode crashed at last boot → resetting render_mode to auto");
-        }
         (true, "previous GPU boot never displayed the UI".to_string())
     } else if mode == RenderMode::ForceGpu {
         (false, "user override (force GPU)".to_string())
-    } else if remembered_failure {
+    } else if early.gpu_boot_failed {
         (true, "auto : remembered GPU boot failure (pick a render mode in Settings to retry)".to_string())
     } else if let Some(virt) = crate::core::system_detect::detect_linux_virt() {
         (true, format!("auto : virt detected ({})", virt))
@@ -304,30 +277,69 @@ async fn configure_render_pipeline(app_state: &AppState, db_mode: crate::core::r
         (false, "auto : native machine".to_string())
     };
 
-    if !force_software {
-        // Arm the crash sentinel with the incremented attempt count. It is
-        // disarmed by the frontend once real frames have been painted
-        // (`notify_ui_ready`) or on graceful close.
-        gpu_sentinel::arm_with_count(prev_attempts.saturating_add(1));
-        gpu_sentinel::set_booted_gpu(true);
-    }
-
-    // Flatpak : le WebKitGTK et le Mesa du runtime font clignoter des éléments en DMA-BUF
-    // et en dessin GPU (Radeon 760M, runtime GNOME 50). Auto coupe les deux ; le GPU garde
-    // la composition, et l'interface sa netteté HiDPI (le mode logiciel force GDK_SCALE=1).
     let flatpak_safe = !force_software
         && mode == RenderMode::Auto
         && env_mode.is_none()
         && crate::core::sandbox::flatpak_id().is_some();
 
-    let dmabuf = crate::core::render_mode::dmabuf_mode(
-        SettingsRepository::get(&app_state.pool, crate::core::render_mode::DMABUF_KEY)
+    apply_linux_render_env(force_software, &reason, &early.dmabuf, flatpak_safe);
+
+    EarlyRenderBoot {
+        force_software,
+        prev_attempts,
+        previous_gpu_boot_failed,
+    }
+}
+
+/// Réconcilie la sentinelle GPU et les préférences SQLite une fois que `single_instance`
+/// a confirmé que ce processus est bien l'instance principale.
+#[cfg(target_os = "linux")]
+async fn reconcile_render_pipeline(app_state: &AppState, early: EarlyRenderBoot) {
+    use crate::core::gpu_sentinel;
+    use crate::core::render_mode::{self, RenderMode};
+    use crate::repository::settings::settings_repository::SettingsRepository;
+
+    gpu_sentinel::disarm();
+
+    let db_mode = RenderMode::parse_or_auto(
+        SettingsRepository::get(&app_state.pool, "render_mode")
             .await
             .ok()
             .flatten()
             .as_deref(),
     );
-    apply_linux_render_env(force_software, &reason, dmabuf, flatpak_safe);
+    let db_dmabuf = render_mode::dmabuf_mode(
+        SettingsRepository::get(&app_state.pool, render_mode::DMABUF_KEY)
+            .await
+            .ok()
+            .flatten()
+            .as_deref(),
+    )
+    .to_string();
+    let mut gpu_failed = SettingsRepository::get(&app_state.pool, gpu_sentinel::GPU_BOOT_FAILED_KEY)
+        .await
+        .ok()
+        .flatten()
+        .as_deref()
+        == Some("1");
+
+    let mut effective_db_mode = db_mode;
+    if early.previous_gpu_boot_failed {
+        let _ = SettingsRepository::set(&app_state.pool, gpu_sentinel::GPU_BOOT_FAILED_KEY, "1").await;
+        gpu_failed = true;
+        if db_mode == RenderMode::ForceGpu {
+            let _ = SettingsRepository::set(&app_state.pool, "render_mode", RenderMode::Auto.as_str()).await;
+            effective_db_mode = RenderMode::Auto;
+            log::warn!("🖥  Forced GPU mode crashed at last boot → resetting render_mode to auto");
+        }
+    }
+
+    render_mode::save_early_prefs(effective_db_mode, &db_dmabuf, gpu_failed);
+
+    if !early.force_software {
+        gpu_sentinel::arm_with_count(early.prev_attempts.saturating_add(1));
+        gpu_sentinel::set_booted_gpu(true);
+    }
 }
 
 /// Apply the WebKitGTK / GDK env vars for the chosen rendering path.
@@ -412,7 +424,7 @@ fn register_dev_desktop_entry() {
     // Vectorielle : nette à toutes les échelles (200 %, grille des applications).
     let icone = concat!(env!("CARGO_MANIFEST_DIR"), "/icons/icon-source.svg");
     let contenu = format!(
-        "[Desktop Entry]\nType=Application\nName=RustMusic (dev)\nExec={}\nIcon={icone}\nStartupWMClass={nom}\nNoDisplay=true\n",
+        "[Desktop Entry]\nType=Application\nName=RustMusic (dev)\nExec=\"{}\"\nIcon=\"{icone}\"\nStartupWMClass={nom}\nNoDisplay=true\n",
         exe.display()
     );
     let fichier = dossier.join(format!("{nom}.desktop"));
@@ -423,11 +435,6 @@ fn register_dev_desktop_entry() {
         Ok(()) => log::info!("🖼  Entrée de bureau de développement : {}", fichier.display()),
         Err(e) => log::warn!("Entrée de bureau de développement non écrite ({}) : {e}", fichier.display()),
     }
-}
-
-#[cfg(not(target_os = "linux"))]
-async fn configure_render_pipeline(_app_state: &AppState, _db_mode: crate::core::render_mode::RenderMode) {
-    // No-op on Windows / macOS — Tauri's webview stack works fine out of the box.
 }
 
 /// Instance unique : une 2e instance réveille la première puis se ferme. En Flatpak, le nom
@@ -441,11 +448,11 @@ fn single_instance() -> tauri::plugin::TauriPlugin<tauri::Wry> {
 }
 
 fn focus_existing_window(app: &tauri::AppHandle, _args: Vec<String>, _cwd: String) {
-    eprintln!("📌 Single-instance callback fired");
+    log::info!("📌 Single-instance callback fired");
 
     // On itère TOUTES les fenêtres au lieu de chercher "main" en dur
     let windows = app.webview_windows();
-    eprintln!("   Windows trouvées : {}", windows.len());
+    log::debug!("   Windows trouvées : {}", windows.len());
 
     for (label, window) in windows {
         // Le mini-lecteur ne se « réveille » pas : il se masque, et la fenêtre
@@ -458,19 +465,19 @@ fn focus_existing_window(app: &tauri::AppHandle, _args: Vec<String>, _cwd: Strin
 
         let is_min = window.is_minimized().unwrap_or(false);
         let is_vis = window.is_visible().unwrap_or(false);
-        eprintln!("   → '{}': minimized={}, visible={}", label, is_min, is_vis);
+        log::debug!("   → '{}': minimized={}, visible={}", label, is_min, is_vis);
 
         // Restauration progressive avec log à chaque étape
         if is_min {
             match window.unminimize() {
-                Ok(_) => eprintln!("   ✓ unminimize OK"),
-                Err(e) => eprintln!("   ✗ unminimize ERR: {}", e),
+                Ok(_) => log::debug!("   ✓ unminimize OK"),
+                Err(e) => log::warn!("   ✗ unminimize ERR: {}", e),
             }
         }
         if !is_vis {
             match window.show() {
-                Ok(_) => eprintln!("   ✓ show OK"),
-                Err(e) => eprintln!("   ✗ show ERR: {}", e),
+                Ok(_) => log::debug!("   ✓ show OK"),
+                Err(e) => log::warn!("   ✗ show ERR: {}", e),
             }
         }
 
@@ -481,8 +488,8 @@ fn focus_existing_window(app: &tauri::AppHandle, _args: Vec<String>, _cwd: Strin
             std::thread::sleep(std::time::Duration::from_millis(100));
         }
         match window.set_focus() {
-            Ok(_) => eprintln!("   ✓ set_focus OK"),
-            Err(e) => eprintln!("   ✗ set_focus ERR: {}", e),
+            Ok(_) => log::debug!("   ✓ set_focus OK"),
+            Err(e) => log::warn!("   ✗ set_focus ERR: {}", e),
         }
         #[cfg(target_os = "windows")]
         let _ = window.set_always_on_top(false);
@@ -495,105 +502,25 @@ fn focus_existing_window(app: &tauri::AppHandle, _args: Vec<String>, _cwd: Strin
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
-pub async fn run() {
-
-    // ─── INITIALISATION DU LOGGER ────────────────────────────────
-    // Écrit les erreurs dans un fichier logs/rustmusic.log
-    // dans le même répertoire que la DB (AppData)
+pub fn run() {
+    // ─── INITIALISATION DU LOGGER (mono-fil) ─────────────────────
+    // Écrit les erreurs dans un fichier logs/rustmusic.log et résout
+    // l'heure locale tant que le processus ne compte qu'un seul fil.
     init_logger();
 
-    let database_url: String = get_database_url("com.larevuegeek.rustmusic", "rustmusic.db".into());
-    log::info!("SQLite DB = {}", database_url);
-
-    // Pas d'`expect` : c'est le seul point de démarrage qui échoue pour une
-    // raison que l'utilisateur peut corriger, et il échoue avant qu'une fenêtre
-    // existe. Un panic ici ne laisse aucune trace — ni message, ni journal.
-    let app_state: AppState = match AppState::new(&database_url).await {
-        Ok(state) => state,
-        Err(error) => crate::helper::fatal::fatal(
-            "RustMusic — impossible de démarrer",
-            &crate::helper::fatal::explain_migration(&error),
-        ),
-    };
-
-    // ─── CONFIGURATION ENV LINUX ─────────────────────────────────
-    // Lit le setting `render_mode` (auto par défaut), puis applique les env
-    // vars WebKitGTK / GDK correspondantes. DOIT être appelé avant
-    // tauri::Builder::default().run(), sinon WebKit lit les vars trop tard.
-    let render_mode = crate::core::render_mode::RenderMode::parse_or_auto(
-        crate::repository::settings::settings_repository::SettingsRepository::get(
-            &app_state.pool,
-            "render_mode",
-        )
-        .await
-        .ok()
-        .flatten()
-        .as_deref(),
-    );
-    configure_render_pipeline(&app_state, render_mode).await;
+    // ─── ENV LINUX (mono-fil, avant Builder::default) ─────────────
+    #[cfg(target_os = "linux")]
+    let early_boot = prepare_linux_render_env_early();
     // Avant tout appel audio : sans cookie, CPAL perd PulseAudio et retombe sur ALSA.
     #[cfg(target_os = "linux")]
     crate::core::sandbox::ensure_pulse_cookie();
 
-    #[cfg(all(target_os = "linux", debug_assertions))]
-    register_dev_desktop_entry();
-
-    // Une carte laissée hors service par un plantage en pleine lecture exclusive revient à PipeWire.
-    #[cfg(target_os = "linux")]
-    crate::core::audio_player::output::pipewire_profile::restore_pending();
-
-    let audio_player = AudioPlayer::new();
-
-    // Restaurer le volume ET le périphérique sélectionné depuis la config.
-    // Le device DOIT être restauré pour que le DoP retrouve le bon `hw:` ALSA
-    // au 1er morceau (sinon fallback DSD2PCM).
-    if let Ok(config) = crate::core::settings_manager::settings_manager::SettingsManager::load_config() {
-        audio_player.set_volume(config.volume_initial);
-        audio_player.set_device(config.device_default);
-    }
-
-    AUDIO_PLAYER
-        .set(Arc::new(Mutex::new(audio_player)))
-        .unwrap();
-
-    // Initialise le profil de qualité audio depuis les settings (auto par défaut).
-    // Doit être appelé avant le premier play, sinon le 1er morceau utilise
-    // les valeurs par défaut (High) au lieu du choix utilisateur.
-    crate::commands::audio_command::init_from_settings(&app_state).await;
-
-    // Le démarrage automatique du serveur DLNA **n'est pas ici** : il attend
-    // le `setup`, après que le plugin d'instance unique a tranché.
-    //
-    // Avant, il ouvrait le port depuis ce point : chaque double-clic sur une
-    // application déjà lancée produisait une seconde instance qui tentait de
-    // s'y lier, échouait, journalisait « adresse déjà utilisée », puis se
-    // refermait une ligne plus loin en découvrant l'instance existante. Cinq
-    // occurrences dans le journal, toutes fausses.
-
-        tauri::Builder::default()
+    tauri::Builder::default()
         // ⚠️ IMPORTANT : single-instance DOIT être le premier plugin enregistré
         // (recommandation officielle Tauri pour que la détection fonctionne).
         // Si une 2e instance tente de se lancer, on focus la fenêtre existante
-        // et on ferme le doublon (la callback s'exécute dans la 1re instance).
+        // et on ferme le doublon avant tout effet de bord DB / audio / réseau.
         .plugin(single_instance())
-        .manage(app_state)
-        // ─── Mémoire de la fenêtre ───
-        //
-        // Taille, position, maximisée, plein écran : sans ça l'application
-        // rouvrait invariablement en 1280×900, quel que soit l'état dans lequel
-        // on l'avait laissée.
-        //
-        // Les drapeaux sont choisis, pas laissés par défaut. `DECORATIONS` en
-        // particulier est écarté : la fenêtre est déclarée `decorations: false`
-        // et porte sa propre barre de titre. Le plugin la restaurerait avec les
-        // décorations du système par-dessus.
-        //
-        // Le plugin plutôt qu'une sauvegarde maison dans la table `settings` :
-        // ce n'est pas la sauvegarde qui est difficile, c'est la restauration.
-        // Une position enregistrée sur un écran débranché depuis rouvre la
-        // fenêtre hors du bureau, injoignable. Le plugin ramène ce cas dans les
-        // limites visibles ; l'écrire soi-même, c'est le découvrir en
-        // production.
         .plugin(
             tauri_plugin_window_state::Builder::default()
                 .with_denylist(&[MINI_LABEL])
@@ -604,16 +531,51 @@ pub async fn run() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_autostart::init(
             tauri_plugin_autostart::MacosLauncher::LaunchAgent,
-            None,  // pas d'arguments supplémentaires
+            None,
         ))
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_process::init())
-        // Auto-updater : interroge rustmusic.dev/api/releases pour vérifier
-        // s'il y a une version plus récente que la version locale. Côté
-        // frontend, la vérification est déclenchée au démarrage dans
-        // +layout.svelte → bannière de mise à jour si dispo.
         .plugin(tauri_plugin_updater::Builder::new().build())
-        .setup(|app| {
+        .setup(move |app| {
+            let database_url: String = get_database_url("com.larevuegeek.rustmusic", "rustmusic.db".into());
+            log::info!("SQLite DB = {}", database_url);
+
+            let app_state: AppState = match tauri::async_runtime::block_on(AppState::new(&database_url)) {
+                Ok(state) => state,
+                Err(error) => crate::helper::fatal::fatal(
+                    "RustMusic — impossible de démarrer",
+                    &crate::helper::fatal::explain_migration(&error),
+                ),
+            };
+
+            #[cfg(target_os = "linux")]
+            tauri::async_runtime::block_on(reconcile_render_pipeline(&app_state, early_boot));
+
+            #[cfg(all(target_os = "linux", debug_assertions))]
+            register_dev_desktop_entry();
+
+            // Une carte laissée hors service par un plantage en pleine lecture exclusive revient à PipeWire.
+            #[cfg(target_os = "linux")]
+            crate::core::audio_player::output::pipewire_profile::restore_pending();
+
+            if let Ok(Some(min_val)) = tauri::async_runtime::block_on(
+                crate::repository::settings::settings_repository::SettingsRepository::get(
+                    &app_state.pool,
+                    "minimize_to_tray",
+                ),
+            ) {
+                set_minimize_to_tray(min_val == "true");
+            }
+
+            let audio_player = AudioPlayer::new();
+            if let Ok(config) = crate::core::settings_manager::settings_manager::SettingsManager::load_config() {
+                audio_player.set_volume(config.volume_initial);
+                audio_player.set_device(config.device_default);
+            }
+
+            let _ = AUDIO_PLAYER.set(Arc::new(Mutex::new(audio_player)));
+            tauri::async_runtime::block_on(crate::commands::audio_command::init_from_settings(&app_state));
+            app.manage(app_state);
             // Veille : pause avant la mise en veille (Linux), blocage pendant la lecture.
             crate::core::system_sleep::start(app.handle().clone());
 
@@ -655,6 +617,8 @@ pub async fn run() {
                             }
                         }
                         "quit" => {
+                            crate::commands::mini_window::allow_exit();
+                            crate::core::window_geometry::save_now(app);
                             app.exit(0);
                         }
                         _ => {}
@@ -797,20 +761,23 @@ pub async fn run() {
             // fast-close serait compté comme un crash GPU au prochain boot.
             // Exception : si le web process WebKit a crashé (fenêtre blanche),
             // un Alt+F4 ne doit PAS effacer l'échec enregistré.
-            if let tauri::WindowEvent::CloseRequested { .. } = event {
+            if let tauri::WindowEvent::CloseRequested { api, .. } = event {
                 if !crate::core::gpu_sentinel::web_process_crashed() {
                     crate::core::gpu_sentinel::disarm();
                 }
 
                 // Sauvegarde explicite de l'état de la fenêtre.
-                //
-                // Le plugin le fait déjà à la sortie du processus, mais cette
-                // sortie n'a pas toujours lieu : l'application garde une icône
-                // dans la zone de notification, et peut donc survivre à la
-                // fermeture de sa fenêtre. Le moment sûr, c'est **maintenant** —
-                // la fenêtre existe encore, ses dimensions sont lisibles.
                 if window.label() == "main" {
                     crate::core::window_geometry::save_now(window.app_handle());
+
+                    if !crate::commands::mini_window::is_exit_allowed()
+                        && MINIMIZE_TO_TRAY.load(std::sync::atomic::Ordering::Relaxed)
+                    {
+                        api.prevent_close();
+                        crate::commands::mini_window::close_mini_window(window.app_handle().clone());
+                        let _ = window.hide();
+                        return;
+                    }
                 }
             }
 
@@ -823,9 +790,10 @@ pub async fn run() {
                 crate::core::window_geometry::schedule_save(window.app_handle().clone());
             }
 
-            // Si la fenêtre principale est détruite, détruire aussi la fenêtre mini
-            // gardée en cache pour que le processus se termine proprement.
-            if window.label() == "main" && matches!(event, tauri::WindowEvent::Destroyed) {
+            // Si la fenêtre principale se ferme ou est détruite, autoriser et détruire
+            // aussi la fenêtre mini gardée en cache pour que le processus se termine proprement.
+            if window.label() == "main" && matches!(event, tauri::WindowEvent::CloseRequested { .. } | tauri::WindowEvent::Destroyed) {
+                crate::commands::mini_window::allow_exit();
                 if let Some(mini) = window.app_handle().get_webview_window(MINI_LABEL) {
                     let _ = mini.destroy();
                 }
@@ -1095,8 +1063,31 @@ pub async fn run() {
         ])
         .build(tauri::generate_context!())
         .expect("error while running tauri application")
-        .run(|_app, event| {
+        .run(|app, event| {
             if let tauri::RunEvent::Exit = event {
+                crate::core::media_controls::shutdown();
+                crate::core::amp_remote::session::select(None);
+                if let Some(player) = AUDIO_PLAYER.get() {
+                    if let Ok(p) = player.try_lock() {
+                        p.stop();
+                    }
+                }
+                if let Some(state) = app.try_state::<AppState>() {
+                    let dlna = state.dlna_server.clone();
+                    let remote = state.mobile_remote_server.clone();
+                    let _ = tauri::async_runtime::block_on(tokio::time::timeout(
+                        std::time::Duration::from_millis(800),
+                        async move {
+                            if let Some(mut srv) = dlna.lock().await.take() {
+                                let _ = srv.stop().await;
+                            }
+                            if let Some(mut srv) = remote.lock().await.take() {
+                                srv.stop().await;
+                            }
+                            let _ = crate::core::network_player::session::stop().await;
+                        },
+                    ));
+                }
                 // Quitter pendant une lecture exclusive, ou dans les 5 s qui suivent :
                 // la carte mise hors service (profil « off ») revient à PipeWire.
                 #[cfg(target_os = "linux")]

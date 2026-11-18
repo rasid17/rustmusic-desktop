@@ -1,5 +1,6 @@
 <script lang="ts">
   // Micro-lecteur : la pochette seule ; au survol, les commandes par-dessus. La molette règle le volume.
+  import { onDestroy } from "svelte";
   import Icon from "@iconify/svelte";
   import { fade } from "svelte/transition";
   import { getCurrentWindow } from "@tauri-apps/api/window";
@@ -10,6 +11,8 @@
   import PlayerProgressBar from "./PlayerProgressBar.svelte";
   import { t } from "#lib/i18n";
   import { player } from "#lib/stores/player/player.store";
+  import { queueState } from "#lib/stores/queue/queueState.store";
+  import { subscribeCoverFallback } from "#lib/helper/tools/coverHelper";
   import { volume, applyVolume } from "#lib/stores/player/volume.store";
   import { playbackPipelineStore } from "#lib/stores/player/playbackPipeline.store";
   import { couleurMorceau } from "#lib/stores/player/trackColor.store";
@@ -89,7 +92,19 @@
   const hoverHide = $derived(gtkHover ? (pointerInside ? "opacity-0" : "") : "group-hover:opacity-0");
 
   const hasTrack = $derived(!!$player?.pathFile);
-  const coverSrc = $derived($player?.audioFile?.tags?.attached_images?.[0]?.image_src ?? null);
+  const attachedCover = $derived($player?.audioFile?.tags?.attached_images?.[0]?.image_src ?? null);
+  const currentQueueCover = $derived($queueState.tracks[$queueState.currentIndex]?.cover ?? null);
+  let fallbackCover = $state<string | null>(null);
+  $effect(() => {
+    if (!hasTrack || attachedCover) {
+      fallbackCover = null;
+      return;
+    }
+    return subscribeCoverFallback(currentQueueCover, "1x", (url) => {
+      fallbackCover = url;
+    });
+  });
+  const coverSrc = $derived(attachedCover || fallbackCover);
   const isPlaying = $derived($player?.status === "playing");
   const waiting = $derived(isPlaying && !!$player?.isPreparing);
   const duration = $derived($player?.duration ?? 0);
@@ -126,6 +141,10 @@
   // Poignée du coin : le carré grandit de la plus grande des deux distances, jusqu'à ×3.
   let resizeStart: { x: number; y: number; size: number } | null = null;
   let resizeFrame = 0;
+  onDestroy(() => {
+    if (hintTimer) clearTimeout(hintTimer);
+    if (resizeFrame) cancelAnimationFrame(resizeFrame);
+  });
   function onGripDown(e: PointerEvent) {
     e.stopPropagation();
     (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
@@ -161,7 +180,7 @@
   onwheel={onWheel}
 >
   <img src={hasTrack && coverSrc ? coverSrc : NO_COVER} alt="" class="absolute inset-0 w-full h-full object-cover pointer-events-none"
-       onerror={(e) => ((e.currentTarget as HTMLImageElement).src = NO_COVER)} />
+       onerror={(e) => { const img = e.currentTarget as HTMLImageElement; if (!img.src.endsWith(NO_COVER)) img.src = NO_COVER; }} />
 
   <!-- Voile et commandes au survol -->
   <div class="absolute inset-0 flex flex-col opacity-0 {hoverShow} transition-opacity duration-200
@@ -175,10 +194,10 @@
       <button type="button" class="{topButton} {$miniPinned ? 'text-(--lc-acc)!' : ''}" title={$t("mini.pin")} aria-label={$t("mini.pin")} aria-pressed={$miniPinned} onclick={toggleMiniPin}>
         <Icon icon={$miniPinned ? "material-symbols:keep" : "material-symbols-light:keep-outline"} width="16" />
       </button>
-      <button type="button" class={topButton} title="Pill style" aria-label="Pill style" onclick={() => void setMiniStyle("pill")}>
+      <button type="button" class={topButton} title={$t("mini.style_pill_hint")} aria-label={$t("mini.style_pill_hint")} onclick={() => void setMiniStyle("pill")}>
         <Icon icon="ph:vinyl-record-duotone" width="16" />
       </button>
-      <button type="button" class={topButton} title="Sleeve style" aria-label="Sleeve style" onclick={() => void setMiniStyle("sleeve")}>
+      <button type="button" class={topButton} title={$t("mini.style_sleeve_hint")} aria-label={$t("mini.style_sleeve_hint")} onclick={() => void setMiniStyle("sleeve")}>
         <Icon icon="ph:disc-duotone" width="16" />
       </button>
       <button type="button" class={topButton} title={$t("mini.back_to_mini")} aria-label={$t("mini.back_to_mini")} onclick={() => exitMicroPlayer()}>

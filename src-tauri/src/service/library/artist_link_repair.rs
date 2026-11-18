@@ -71,8 +71,18 @@ pub async fn repair(
     .into_iter()
     .collect();
 
+    let mut existing_links: std::collections::HashSet<(String, String)> = sqlx::query_as::<_, (String, String)>(
+        "SELECT library_track_id, artist_id FROM library_track_artists WHERE (?1 IS NULL OR library_id = ?1)",
+    )
+    .bind(library_id)
+    .fetch_all(pool)
+    .await
+    .map_err(|e| format!("Lecture des liaisons existantes : {e}"))?
+    .into_iter()
+    .collect();
+
     let mut tx = pool
-        .begin()
+        .begin_with("BEGIN IMMEDIATE")
         .await
         .map_err(|e| format!("Ouverture de la transaction : {e}"))?;
 
@@ -130,29 +140,21 @@ pub async fn repair(
             .await
             .map_err(|e| format!("Rattachement de « {nom} » à la bibliothèque : {e}"))?;
 
-            // `changes()` dirait « 1 » même sur un upsert qui n'ajoute rien.
-            let avant: i64 = sqlx::query_scalar(
-                "SELECT COUNT(*) FROM library_track_artists
-                 WHERE library_track_id = ? AND artist_id = ?",
-            )
-            .bind(&piste.id)
-            .bind(&artist_id)
-            .fetch_one(&mut *tx)
-            .await
-            .map_err(|e| format!("Vérification de la liaison : {e}"))?;
+            let already_linked = existing_links.contains(&(piste.id.clone(), artist_id.clone()));
 
-            LibraryTrackArtistRepository::insert_library_track_artist(
-                &mut *tx,
-                LibraryTrackArtistCreate {
-                    library_id: piste.library_id,
-                    artist_id: artist_id.clone(),
-                    library_track_id: piste.id.clone(),
-                },
-            )
-            .await
-            .map_err(|e| format!("Liaison piste ↔ artiste : {e}"))?;
+            if !already_linked {
+                LibraryTrackArtistRepository::insert_library_track_artist(
+                    &mut *tx,
+                    LibraryTrackArtistCreate {
+                        library_id: piste.library_id,
+                        artist_id: artist_id.clone(),
+                        library_track_id: piste.id.clone(),
+                    },
+                )
+                .await
+                .map_err(|e| format!("Liaison piste ↔ artiste : {e}"))?;
 
-            if avant == 0 {
+                existing_links.insert((piste.id.clone(), artist_id.clone()));
                 rapport.links_created += 1;
             }
             if premier.is_none() {

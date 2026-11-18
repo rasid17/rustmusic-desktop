@@ -62,6 +62,38 @@ pub fn local_ip_toward(peer: Ipv4Addr) -> Option<Ipv4Addr> {
     }
 }
 
+/// Carte virtuelle / tunnel Windows identifiée par son nom ou sa description.
+#[cfg_attr(not(windows), allow(dead_code))]
+fn is_virtual_adapter_name(name: &str, description: &str) -> bool {
+    let combined = format!("{name} {description}").to_ascii_lowercase();
+    [
+        "vethernet",
+        "hyper-v",
+        "wsl",
+        "vmware",
+        "virtualbox",
+        "vbox",
+        "docker",
+        "loopback",
+        "teredo",
+        "isatap",
+        "tailscale",
+        "zerotier",
+        "wireguard",
+        "wintun",
+        "tap-",
+        "utun",
+        "tunnel",
+        "openvpn",
+        "anyconnect",
+        "fortinet",
+        "nordlynx",
+        "mullvad",
+    ]
+    .iter()
+    .any(|kw| combined.contains(kw))
+}
+
 #[cfg(unix)]
 mod platform {
     use std::ffi::CStr;
@@ -146,15 +178,31 @@ mod platform {
             while !adapter.is_null() {
                 let a = &*adapter;
                 if a.OperStatus == IfOperStatusUp {
+                    let friendly = if a.FriendlyName.is_null() {
+                        String::new()
+                    } else {
+                        a.FriendlyName.to_string().unwrap_or_default()
+                    };
+                    let desc = if a.Description.is_null() {
+                        String::new()
+                    } else {
+                        a.Description.to_string().unwrap_or_default()
+                    };
+                    let virtual_if = super::is_virtual_adapter_name(&friendly, &desc);
                     // Carte physique avec passerelle : celle du réseau de la maison.
-                    let lan = matches!(a.IfType, IF_TYPE_ETHERNET | IF_TYPE_WIFI) && !a.FirstGatewayAddress.is_null();
+                    let lan = !virtual_if
+                        && matches!(a.IfType, IF_TYPE_ETHERNET | IF_TYPE_WIFI)
+                        && !a.FirstGatewayAddress.is_null();
                     let mut unicast = a.FirstUnicastAddress;
                     while !unicast.is_null() {
                         let u = &*unicast;
                         let sa = u.Address.lpSockaddr;
                         if !sa.is_null() && (*sa).sa_family == AF_INET {
                             let sin = &*(sa as *const SOCKADDR_IN);
-                            out.push(Iface { ip: Ipv4Addr::from(u32::from_be(sin.sin_addr.S_un.S_addr)), lan });
+                            let ip = Ipv4Addr::from(u32::from_be(sin.sin_addr.S_un.S_addr));
+                            if !virtual_if {
+                                out.push(Iface { ip, lan });
+                            }
                         }
                         unicast = u.Next;
                     }
@@ -184,5 +232,14 @@ mod tests {
     fn lists_without_loopback() {
         let ips = local_ipv4s();
         assert!(ips.iter().all(|ip| !ip.is_loopback()));
+    }
+
+    #[test]
+    fn virtual_adapters_are_filtered_on_windows() {
+        assert!(is_virtual_adapter_name("vEthernet (WSL)", "Hyper-V Virtual Ethernet Adapter"));
+        assert!(is_virtual_adapter_name("VirtualBox Host-Only Network", ""));
+        assert!(is_virtual_adapter_name("Tailscale", "Wintun Userspace Tunnel"));
+        assert!(!is_virtual_adapter_name("Ethernet", "Realtek PCIe GbE Family Controller"));
+        assert!(!is_virtual_adapter_name("Wi-Fi", "Intel(R) Wi-Fi 6 AX200"));
     }
 }

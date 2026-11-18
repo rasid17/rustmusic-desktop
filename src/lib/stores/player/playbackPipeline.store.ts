@@ -62,6 +62,8 @@ export function pipelineMode(info: PlaybackPipelineInfo | null, volume = 100): P
 export const playbackPipelineStore = writable<PlaybackPipelineInfo | null>(null);
 
 let unlisten: UnlistenFn | null = null;
+let pending: Promise<void> | null = null;
+let gen = 0;
 
 /**
  * Subscribe to the backend event. Idempotent — calling twice doesn't double-subscribe.
@@ -69,13 +71,26 @@ let unlisten: UnlistenFn | null = null;
  */
 export async function initPlaybackPipelineListener(): Promise<void> {
   if (unlisten !== null) return;
-  unlisten = await listen<PlaybackPipelineInfo>("playback-pipeline", (event) => {
+  if (pending !== null) return pending;
+  const currentGen = ++gen;
+  pending = listen<PlaybackPipelineInfo>("playback-pipeline", (event) => {
     playbackPipelineStore.set(event.payload);
+  }).then((f) => {
+    if (currentGen !== gen) {
+      f();
+      return;
+    }
+    unlisten = f;
+  }).finally(() => {
+    pending = null;
   });
+  return pending;
 }
 
 /** Stop listening — only useful for hot-reload / cleanup in dev. */
 export async function disposePlaybackPipelineListener(): Promise<void> {
+  gen++;
+  pending = null;
   if (unlisten) {
     unlisten();
     unlisten = null;

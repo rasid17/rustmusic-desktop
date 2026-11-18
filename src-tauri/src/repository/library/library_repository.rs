@@ -269,7 +269,7 @@ impl LibraryRepository {
         pool: &sqlx::SqlitePool,
         library_id: i64,
     ) -> Result<(), sqlx::Error> {
-        let mut tx = pool.begin().await?;
+        let mut tx = pool.begin_with("BEGIN IMMEDIATE").await?;
 
         sqlx::query(
             r#"

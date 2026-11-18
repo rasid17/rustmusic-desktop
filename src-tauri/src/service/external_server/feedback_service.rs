@@ -308,7 +308,7 @@ pub async fn apply_server_state(pool: &SqlitePool, server_id: i64, songs: &[Remo
         return Ok((0, 0));
     };
     let (mut likes, mut ratings) = (0, 0);
-    let mut tx = pool.begin().await?;
+    let mut tx = pool.begin_with("BEGIN IMMEDIATE").await?;
     for song in songs {
         let path = song_path(server_id, song);
         // La source est le serveur lui-même (un entier : sûr dans le texte de la requête).

@@ -34,26 +34,26 @@
     timers.forEach(clearTimeout);
   });
 </script>
-<div class="fixed top-4 right-4 z-50 flex w-[calc(100%-2rem)] max-w-sm flex-col gap-3">
+<div class="fixed top-18 right-4 z-50 flex w-[calc(100%-2rem)] max-w-sm flex-col gap-3 pointer-events-none">
   {#each $toasts as toast (toast.id)}
     <div
       use:toastLifecycle={toast}
       onmouseenter={() => pauseTimer(toast.id)}
       onmouseleave={() => startTimer(toast)}
       data-variant={toast.type}
-      class="group relative overflow-hidden rounded-xl border shadow-lg backdrop-blur-xl
-             bg-white/55 text-neutral-900 border-white/20
-             dark:bg-neutral-950/45 dark:text-neutral-100 dark:border-white/10
+      class="pointer-events-auto group relative overflow-hidden rounded-xl border shadow-lg backdrop-blur-xl
+             bg-white/85 text-neutral-900 border-black/10
+             dark:bg-neutral-950/85 dark:text-neutral-100 dark:border-white/10
 
-             data-[variant=success]:bg-emerald-50/35
-             data-[variant=error]:bg-rose-50/35
-             data-[variant=warning]:bg-amber-50/35
-             data-[variant=info]:bg-sky-50/35
+             data-[variant=success]:bg-emerald-50/85
+             data-[variant=error]:bg-rose-50/85
+             data-[variant=warning]:bg-amber-50/85
+             data-[variant=info]:bg-sky-50/85
 
-             dark:data-[variant=success]:bg-emerald-500/10
-             dark:data-[variant=error]:bg-rose-500/10
-             dark:data-[variant=warning]:bg-amber-500/10
-             dark:data-[variant=info]:bg-sky-500/10
+             dark:data-[variant=success]:bg-emerald-950/85
+             dark:data-[variant=error]:bg-rose-950/85
+             dark:data-[variant=warning]:bg-amber-950/85
+             dark:data-[variant=info]:bg-sky-950/85
 
              data-[variant=success]:border-emerald-400/40
              data-[variant=error]:border-rose-400/40

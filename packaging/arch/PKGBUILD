@@ -19,9 +19,7 @@ _rootdir="$(cd "${startdir}/../.." && pwd)"
 
 build() {
   cd "${_rootdir}"
-  if [ ! -f "src-tauri/target/release/RustMusic" ]; then
-    npx tauri build --no-bundle --config '{"bundle":{"createUpdaterArtifacts":false}}'
-  fi
+  npx tauri build --no-bundle --config '{"bundle":{"createUpdaterArtifacts":false}}'
 }
 
 package() {
@@ -32,7 +30,7 @@ package() {
 
   install -Dm644 "src-tauri/icons/32x32.png" "${pkgdir}/usr/share/icons/hicolor/32x32/apps/RustMusic.png"
   install -Dm644 "src-tauri/icons/128x128.png" "${pkgdir}/usr/share/icons/hicolor/128x128/apps/RustMusic.png"
-  install -Dm644 "src-tauri/icons/128x128@2x.png" "${pkgdir}/usr/share/icons/hicolor/256x256@2/apps/RustMusic.png"
+  install -Dm644 "src-tauri/icons/128x128@2x.png" "${pkgdir}/usr/share/icons/hicolor/256x256/apps/RustMusic.png"
   install -Dm644 "src-tauri/icons/icon.png" "${pkgdir}/usr/share/icons/hicolor/512x512/apps/RustMusic.png"
 
   install -Dm644 /dev/stdin "${pkgdir}/usr/share/applications/RustMusic.desktop" << 'EOF'

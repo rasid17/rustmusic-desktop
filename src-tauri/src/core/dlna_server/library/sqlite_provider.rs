@@ -227,12 +227,24 @@ impl LibraryProvider for SqliteLibraryProvider {
                 Err(_) => continue,
             };
 
-            if file_type.is_dir() {
+            let is_symlink = file_type.is_symlink();
+            let is_dir = file_type.is_dir()
+                || (is_symlink
+                    && entry_path.is_dir()
+                    && std::fs::canonicalize(&entry_path).is_ok_and(|canon| {
+                        dirs.iter().any(|d| {
+                            std::fs::canonicalize(&d.path)
+                                .is_ok_and(|root| canon.starts_with(root))
+                        })
+                    }));
+            let is_file = file_type.is_file() || (is_symlink && entry_path.is_file());
+
+            if is_dir {
                 subfolders.push(DlnaFolder {
                     path: path_str,
                     name,
                 });
-            } else if file_type.is_file() {
+            } else if is_file {
                 let ext = entry_path
                     .extension()
                     .and_then(|e| e.to_str())

@@ -89,6 +89,8 @@ pub fn begin_track_on_engine(
     lsb_first: bool,
     seek_position: Arc<AtomicU64>,
     total_duration: Arc<AtomicU64>,
+    cue_start_secs: Arc<AtomicU64>,
+    cue_end_secs: Arc<AtomicU64>,
 ) -> Result<(DopTrackHandle, bool), String> {
     let mut guard = ENGINE.lock().unwrap_or_else(|e| e.into_inner());
 
@@ -107,7 +109,14 @@ pub fn begin_track_on_engine(
     }
 
     let engine = guard.as_mut().unwrap();
-    let handle = engine.begin_track(decoder, lsb_first, seek_position, total_duration);
+    let handle = engine.begin_track(
+        decoder,
+        lsb_first,
+        seek_position,
+        total_duration,
+        cue_start_secs,
+        cue_end_secs,
+    );
     Ok((handle, !reuse))
 }
 
@@ -169,6 +178,8 @@ pub struct DopTrackHandle {
     /// Passe à `true` quand le warm-up DAC est fini (1re piste seulement ;
     /// déjà `true` pour les pistes suivantes → démarrage instantané).
     pub audio_started: Arc<AtomicBool>,
+    /// Passe à `false` si le thread de rendu s'est arrêté (débranchement DAC…).
+    pub render_alive: Arc<AtomicBool>,
 }
 
 /// Moteur DoP persistant (instance unique dans `ENGINE`).
@@ -182,6 +193,7 @@ pub struct DopEngine {
 
     // Contrôle du render persistant.
     ctl: DopRenderCtl,
+    render_alive: Arc<AtomicBool>,
     render_handle: Option<JoinHandle<Result<(), String>>>,
 
     // Décodeur courant (remplacé à chaque piste).
@@ -224,37 +236,48 @@ impl DopEngine {
         };
 
         let render_ctl = ctl.clone();
+        let render_alive = Arc::new(AtomicBool::new(true));
+        let render_alive_thread = render_alive.clone();
+        let stop_flag_for_render = ctl.render_stop.clone();
+        let dev_for_loss = device_name.clone();
         let render_handle = std::thread::Builder::new()
             .name("rustmusic-dop-render".into())
-            .spawn(move || match cible {
-                #[cfg(target_os = "windows")]
-                CibleDop::Wasapi { device_name } => {
-                    crate::core::audio_player::audio_output_wasapi::run_wasapi_dop_playback(
-                        carrier_rate,
-                        channels,
-                        consumer,
-                        Some(device_name),
-                        render_ctl,
-                    )
-                    .map_err(|e| e.to_string())
+            .spawn(move || {
+                let res = match cible {
+                    #[cfg(target_os = "windows")]
+                    CibleDop::Wasapi { device_name } => {
+                        crate::core::audio_player::audio_output_wasapi::run_wasapi_dop_playback(
+                            carrier_rate,
+                            channels,
+                            consumer,
+                            Some(device_name),
+                            render_ctl,
+                        )
+                        .map_err(|e| e.to_string())
+                    }
+                    #[cfg(target_os = "linux")]
+                    CibleDop::Alsa { hw_id, reservation } => {
+                        // Gardée jusqu'au retour du render (stream fermé), puis relâchée.
+                        let _reservation = reservation;
+                        super::dop_alsa::run_alsa_dop_render(&hw_id, carrier_rate, channels, consumer, render_ctl)
+                    }
+                    #[cfg(target_os = "macos")]
+                    CibleDop::CoreAudio { device, device_id } => {
+                        super::dop_coreaudio::run_coreaudio_dop_render(
+                            &device,
+                            device_id,
+                            carrier_rate,
+                            channels,
+                            consumer,
+                            render_ctl,
+                        )
+                    }
+                };
+                render_alive_thread.store(false, Ordering::Release);
+                if res.is_err() && !stop_flag_for_render.load(Ordering::Relaxed) {
+                    super::shared_engine::notify_lost(&dev_for_loss, None);
                 }
-                #[cfg(target_os = "linux")]
-                CibleDop::Alsa { hw_id, reservation } => {
-                    // Gardée jusqu'au retour du render (stream fermé), puis relâchée.
-                    let _reservation = reservation;
-                    super::dop_alsa::run_alsa_dop_render(&hw_id, carrier_rate, channels, consumer, render_ctl)
-                }
-                #[cfg(target_os = "macos")]
-                CibleDop::CoreAudio { device, device_id } => {
-                    super::dop_coreaudio::run_coreaudio_dop_render(
-                        &device,
-                        device_id,
-                        carrier_rate,
-                        channels,
-                        consumer,
-                        render_ctl,
-                    )
-                }
+                res
             })
             .map_err(|e| format!("spawn render DoP: {e}"))?;
 
@@ -285,6 +308,7 @@ impl DopEngine {
             device_name,
             producer,
             ctl,
+            render_alive,
             render_handle: Some(render_handle),
             decoder_stop: Arc::new(AtomicBool::new(false)),
             decoder_handle: None,
@@ -295,7 +319,8 @@ impl DopEngine {
 
     /// Le moteur peut-il jouer cette piste sans reconstruire le stream ?
     pub fn is_compatible(&self, carrier_rate: u32, channels: u16, device_name: &str) -> bool {
-        self.carrier_rate == carrier_rate
+        self.render_alive.load(Ordering::Acquire)
+            && self.carrier_rate == carrier_rate
             && self.channels == channels
             && self.device_name == device_name
     }
@@ -309,6 +334,8 @@ impl DopEngine {
         lsb_first: bool,
         seek_position: Arc<AtomicU64>,
         total_duration: Arc<AtomicU64>,
+        cue_start_secs: Arc<AtomicU64>,
+        cue_end_secs: Arc<AtomicU64>,
     ) -> DopTrackHandle {
         // 1. Stopper le décodeur précédent.
         self.decoder_stop.store(true, Ordering::Relaxed);
@@ -351,6 +378,8 @@ impl DopEngine {
                     seek_flush,
                     total_duration,
                     decoder_done,
+                    cue_start_secs,
+                    cue_end_secs,
                 );
             })
             .expect("spawn décodeur DoP");
@@ -360,6 +389,7 @@ impl DopEngine {
             music_frames_played: self.ctl.music_frames_played.clone(),
             decoder_done: self.decoder_done.clone(),
             audio_started: self.ctl.audio_started.clone(),
+            render_alive: self.render_alive.clone(),
         }
     }
 
@@ -406,9 +436,26 @@ fn dop_decode_loop(
     seek_flush: Arc<AtomicBool>,
     total_duration: Arc<AtomicU64>,
     decoder_done: Arc<AtomicBool>,
+    cue_start_secs: Arc<AtomicU64>,
+    cue_end_secs: Arc<AtomicU64>,
 ) {
     let channels = decoder.channel_count();
+    let ch = channels.max(1) as usize;
     let mut encoder = DopEncoder::new(channels, lsb_first);
+
+    let cue_start_init = f64::from_bits(cue_start_secs.load(Ordering::Relaxed)).max(0.0);
+    let mut cur_carrier_frames: u64 = if cue_start_init > 0.0 {
+        match decoder.seek_to_seconds(cue_start_init) {
+            Ok(actual) => {
+                let f = (actual * carrier_rate as f64).round() as u64;
+                music_frames_played.store(f as usize, Ordering::Relaxed);
+                f
+            }
+            Err(_) => 0,
+        }
+    } else {
+        0
+    };
 
     loop {
         if decoder_stop.load(Ordering::Relaxed) {
@@ -420,10 +467,20 @@ fn dop_decode_loop(
         if seek_bits != u64::MAX {
             seek_position.store(u64::MAX, Ordering::Relaxed);
             let total = f64::from_bits(total_duration.load(Ordering::Relaxed));
-            let secs = f64::from_bits(seek_bits).max(0.0).min(total.max(0.0));
+            let cue_start = f64::from_bits(cue_start_secs.load(Ordering::Relaxed)).max(0.0);
+            let cue_end = f64::from_bits(cue_end_secs.load(Ordering::Relaxed)).max(0.0);
+            let max_seek = if cue_end > cue_start {
+                cue_end
+            } else {
+                cue_start + total.max(0.0)
+            };
+            let min_seek = if cue_end > cue_start { cue_start } else { 0.0 };
+            let secs = f64::from_bits(seek_bits).clamp(min_seek, max_seek);
             if let Ok(actual) = decoder.seek_to_seconds(secs) {
                 encoder.reset();
-                music_frames_played.store((actual * carrier_rate as f64) as usize, Ordering::Relaxed);
+                let f = (actual * carrier_rate as f64) as usize;
+                cur_carrier_frames = f as u64;
+                music_frames_played.store(f, Ordering::Relaxed);
                 seek_flush.store(true, Ordering::Relaxed);
                 let t = Instant::now();
                 while seek_flush.load(Ordering::Relaxed) {
@@ -451,8 +508,26 @@ fn dop_decode_loop(
             continue;
         }
 
+        let cue_start = f64::from_bits(cue_start_secs.load(Ordering::Relaxed)).max(0.0);
+        let cue_end = f64::from_bits(cue_end_secs.load(Ordering::Relaxed)).max(0.0);
+        let frames_here = samples.len() / ch;
+        let mut push_slice = samples.as_slice();
+        let mut reached_cue_end = false;
+        if cue_end > cue_start {
+            let end_frame_target = (cue_end * carrier_rate as f64).round() as u64;
+            if cur_carrier_frames >= end_frame_target {
+                break;
+            }
+            if cur_carrier_frames.saturating_add(frames_here as u64) >= end_frame_target {
+                let keep_frames = end_frame_target.saturating_sub(cur_carrier_frames) as usize;
+                push_slice = &samples[..keep_frames * ch];
+                reached_cue_end = true;
+            }
+        }
+        cur_carrier_frames = cur_carrier_frames.saturating_add((push_slice.len() / ch) as u64);
+
         let mut off = 0usize;
-        while off < samples.len() {
+        while off < push_slice.len() {
             if decoder_stop.load(Ordering::Relaxed) {
                 break;
             }
@@ -461,12 +536,15 @@ fn dop_decode_loop(
             }
             let written = {
                 let mut p = producer.lock().unwrap_or_else(|e| e.into_inner());
-                p.push_slice(&samples[off..])
+                p.push_slice(&push_slice[off..])
             };
             off += written;
             if written == 0 {
                 std::thread::sleep(Duration::from_millis(1));
             }
+        }
+        if reached_cue_end {
+            break;
         }
     }
 

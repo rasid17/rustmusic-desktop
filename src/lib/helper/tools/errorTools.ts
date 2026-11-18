@@ -15,6 +15,7 @@ const FR_TO_EN: [string, string][] = [
   ["serveur désactivé", "Server disabled"],
   ["serveur inconnu", "Unknown server"],
   ["identifiants du serveur manquants", "Missing server credentials"],
+  ["aucun profil", "No active profile"],
   ["nom vide", "Name cannot be empty"],
 ];
 

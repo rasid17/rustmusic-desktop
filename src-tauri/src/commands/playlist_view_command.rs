@@ -89,22 +89,24 @@ pub async fn get_tracks_view_by_paths(
         return Ok(Vec::new());
     }
 
-    // Un `?` par chemin : les valeurs restent liées, et la longueur de la liste
-    // ne change rien à la sécurité de la requête.
-    let trous = std::iter::repeat_n("?", paths.len())
-        .collect::<Vec<_>>()
-        .join(",");
-    let sql = format!("{TRACK_VIEW_SELECT}\n{TRACK_VIEW_FROM}\nWHERE lf.path IN ({trous})");
+    let mut trouvees = Vec::with_capacity(paths.len());
+    for chunk in paths.chunks(400) {
+        let trous = std::iter::repeat_n("?", chunk.len())
+            .collect::<Vec<_>>()
+            .join(",");
+        let sql = format!("{TRACK_VIEW_SELECT}\n{TRACK_VIEW_FROM}\nWHERE lf.path IN ({trous})");
 
-    let mut q = sqlx::query_as::<_, TrackListView>(sqlx::AssertSqlSafe(sql));
-    for p in &paths {
-        q = q.bind(p);
+        let mut q = sqlx::query_as::<_, TrackListView>(sqlx::AssertSqlSafe(sql));
+        for p in chunk {
+            q = q.bind(p);
+        }
+
+        let rows = q
+            .fetch_all(&state.pool)
+            .await
+            .map_err(|e| format!("Pistes par chemin : {e}"))?;
+        trouvees.extend(rows);
     }
-
-    let trouvees = q
-        .fetch_all(&state.pool)
-        .await
-        .map_err(|e| format!("Pistes par chemin : {e}"))?;
 
     Ok(arrange_by(trouvees, &paths, |t| t.path.clone()))
 }
@@ -118,20 +120,24 @@ async fn fill_in_order(
         return Ok(Vec::new());
     }
 
-    let trous = std::iter::repeat_n("?", ids.len())
-        .collect::<Vec<_>>()
-        .join(",");
-    let sql = format!("{TRACK_VIEW_SELECT}\n{TRACK_VIEW_FROM}\nWHERE lt.id IN ({trous})");
+    let mut trouvees = Vec::with_capacity(ids.len());
+    for chunk in ids.chunks(400) {
+        let trous = std::iter::repeat_n("?", chunk.len())
+            .collect::<Vec<_>>()
+            .join(",");
+        let sql = format!("{TRACK_VIEW_SELECT}\n{TRACK_VIEW_FROM}\nWHERE lt.id IN ({trous})");
 
-    let mut q = sqlx::query_as::<_, TrackListView>(sqlx::AssertSqlSafe(sql));
-    for id in ids {
-        q = q.bind(id);
+        let mut q = sqlx::query_as::<_, TrackListView>(sqlx::AssertSqlSafe(sql));
+        for id in chunk {
+            q = q.bind(id);
+        }
+
+        let rows = q
+            .fetch_all(pool)
+            .await
+            .map_err(|e| format!("Pistes de la playlist : {e}"))?;
+        trouvees.extend(rows);
     }
-
-    let trouvees = q
-        .fetch_all(pool)
-        .await
-        .map_err(|e| format!("Pistes de la playlist : {e}"))?;
 
     Ok(arrange_by(trouvees, ids, |t| t.id.clone()))
 }

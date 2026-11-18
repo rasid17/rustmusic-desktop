@@ -224,6 +224,64 @@ pub async fn apply_rename(
     if moves.is_empty() {
         return Err("Aucun déplacement à appliquer.".to_string());
     }
+    let case_insensitive = cfg!(windows);
+    let norm = |p: &str| {
+        let u = p.replace('\\', "/");
+        if case_insensitive {
+            u.to_lowercase()
+        } else {
+            u
+        }
+    };
+
+    let mut seen_targets: std::collections::HashSet<String> = std::collections::HashSet::new();
+    let mut active_moves: Vec<(String, String)> = Vec::with_capacity(moves.len());
+    for (from, to) in moves {
+        if from.trim().is_empty() || to.trim().is_empty() {
+            return Err("Chemin source ou cible invalide.".to_string());
+        }
+        if from == to {
+            continue;
+        }
+        if !seen_targets.insert(norm(&to)) {
+            return Err(format!("Conflit : deux fichiers pointent vers la même cible ({to})."));
+        }
+        active_moves.push((from, to));
+    }
+    if active_moves.is_empty() {
+        return Err("Aucun déplacement à appliquer.".to_string());
+    }
+
+    let source_set: std::collections::HashSet<String> =
+        active_moves.iter().map(|(f, _)| norm(f)).collect();
+    for (from, to) in &active_moves {
+        if norm(from) != norm(to)
+            && !source_set.contains(&norm(to))
+            && std::path::Path::new(to).exists()
+        {
+            return Err(format!("La cible existe déjà sur le disque : {to}"));
+        }
+    }
+
+    let planned: Vec<PlannedMove> = active_moves
+        .iter()
+        .map(|(from, to)| PlannedMove {
+            from: from.clone(),
+            to: to.clone(),
+            unchanged: false,
+            issues: Vec::new(),
+        })
+        .collect();
+    let (ordered_indices, cycles) = planner::order(&planned, case_insensitive);
+    if !cycles.is_empty() {
+        return Err(format!(
+            "{} fichiers forment une permutation circulaire. Renommez-les en deux fois.",
+            cycles.len()
+        ));
+    }
+    let ordered_moves: Vec<(String, String)> =
+        ordered_indices.into_iter().map(|i| active_moves[i].clone()).collect();
+
     let kind = if restructure { "restructure" } else { "rename" };
 
     // Les compagnons et le nettoyage n'ont de sens qu'en restructuration : un
@@ -244,7 +302,7 @@ pub async fn apply_rename(
             .map_err(|e| format!("Lecture des dossiers : {e}"))?;
     }
 
-    move_service::apply_moves(&state.pool, library_id, kind, &pattern, moves, options).await
+    move_service::apply_moves(&state.pool, library_id, kind, &pattern, ordered_moves, options).await
 }
 
 /// Les derniers lots du journal.

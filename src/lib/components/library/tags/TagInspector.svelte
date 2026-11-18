@@ -178,7 +178,8 @@
       {#if one}
         {$t("workshop.applies_one")}
       {:else}
-        {@html $t("workshop.applies_many").replace("{n}", `<b class="text-(--rg-tx2)">${plural(targets.length)}</b>`)}
+        {@const parts = $t("workshop.applies_many").split("{n}")}
+        {parts[0]}<b class="text-(--rg-tx2)">{plural(targets.length)}</b>{parts.slice(1).join("{n}")}
       {/if}
     </p>
   {/if}

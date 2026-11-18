@@ -43,6 +43,7 @@ pub struct AudioPlayer {
     volume: Arc<AtomicU8>, // 0..100
     selected_device: Arc<Mutex<Option<String>>>,
     seek_position: Arc<AtomicU64>,
+    playback_gen: Arc<AtomicU64>,
 }
 
 impl AudioPlayer {
@@ -59,6 +60,7 @@ impl AudioPlayer {
             volume: Arc::new(AtomicU8::new(80)),
             selected_device: Arc::new(Mutex::new(None)),
             seek_position: Arc::new(AtomicU64::new(u64::MAX)),
+            playback_gen: Arc::new(AtomicU64::new(0)),
         }
     }
 
@@ -104,6 +106,9 @@ impl AudioPlayer {
             std::thread::sleep(std::time::Duration::from_millis(2));
             if std::time::Instant::now() >= deadline {
                 log::warn!("⚠️ Timeout stop() — le stream ne s'est pas arrêté en 3s, on force");
+                // Invalider la génération courante pour empêcher le vieux thread
+                // d'écraser une nouvelle lecture lorsqu'il sortira plus tard.
+                self.playback_gen.fetch_add(1, Ordering::SeqCst);
                 self.is_stream_alive.store(false, Ordering::SeqCst);
                 break;
             }
@@ -171,6 +176,7 @@ impl AudioPlayer {
 
         self.is_stopped.store(false, Ordering::SeqCst);
         self.is_stream_alive.store(true, Ordering::SeqCst);
+        let my_gen = self.playback_gen.fetch_add(1, Ordering::SeqCst) + 1;
 
         // Clone pour le thread (on garde la pause synchronisée)
         let is_playing_clone: Arc<AtomicBool> = self.is_playing.clone();
@@ -183,6 +189,7 @@ impl AudioPlayer {
         let seek_position_clone: Arc<AtomicU64> = self.seek_position.clone();
         let cue_start_secs_clone: Arc<AtomicU64> = self.cue_start_secs.clone();
         let cue_end_secs_clone: Arc<AtomicU64> = self.cue_end_secs.clone();
+        let playback_gen_clone: Arc<AtomicU64> = self.playback_gen.clone();
         let selected_device_name = self.get_selected_device_name();
 
         // Reset seek position pour le nouveau fichier
@@ -193,6 +200,7 @@ impl AudioPlayer {
         let app_handle_guard = app_handle.clone();
         let is_stream_alive_guard = self.is_stream_alive.clone();
         let is_playing_guard = self.is_playing.clone();
+        let playback_gen_guard = self.playback_gen.clone();
 
         std::thread::spawn(move || {
             if let Err(e) = Self::play_file_thread(
@@ -209,18 +217,15 @@ impl AudioPlayer {
                 seek_position_clone,
                 cue_start_secs_clone,
                 cue_end_secs_clone,
+                playback_gen_clone,
+                my_gen,
             ) {
                 log::error!("❌ Erreur lecture fichier: {}", e);
 
-                // Les deux drapeaux sont levés avant le fil, et `play_file_thread`
-                // ne les rabaisse qu'à sa fin normale — il a huit sorties
-                // d'erreur avant. Sans ça, un fichier illisible ou un
-                // périphérique qui refuse la négociation laissait `is_playing`
-                // à vrai, donc toute lecture suivante refusée, et
-                // `is_stream_alive` à vrai, donc chaque `stop()` bloqué trois
-                // secondes.
-                is_playing_guard.store(false, Ordering::SeqCst);
-                is_stream_alive_guard.store(false, Ordering::SeqCst);
+                if playback_gen_guard.load(Ordering::SeqCst) == my_gen {
+                    is_playing_guard.store(false, Ordering::SeqCst);
+                    is_stream_alive_guard.store(false, Ordering::SeqCst);
+                }
 
                 // Sans ça, un échec de démarrage laisse la barre figée à zéro
                 // pour toujours : l'interface attendrait un `false` que plus
@@ -250,6 +255,8 @@ impl AudioPlayer {
         seek_position: Arc<AtomicU64>,
         cue_start_secs: Arc<AtomicU64>,
         cue_end_secs: Arc<AtomicU64>,
+        playback_gen: Arc<AtomicU64>,
+        my_gen: u64,
     ) -> Result<(), Box<dyn std::error::Error>> {
         let cue_slice = crate::core::cue::parse_cue_uri(&file_path.to_string_lossy());
         if let Some(ref slice) = cue_slice {
@@ -287,6 +294,8 @@ impl AudioPlayer {
                 return Self::play_dsd_file_thread(
                     app_handle,
                     actual_file_path,
+                    original_file_path,
+                    cue_slice,
                     is_paused,
                     is_playing,
                     is_stopped,
@@ -296,6 +305,10 @@ impl AudioPlayer {
                     volume,
                     selected_device_name,
                     seek_position,
+                    cue_start_secs,
+                    cue_end_secs,
+                    playback_gen,
+                    my_gen,
                 );
             }
         }
@@ -637,7 +650,18 @@ impl AudioPlayer {
         // On sépare les données (RwLock) du curseur de lecture (Atomic)
         // Le RwLock est "safe" ici car une fois le fichier entièrement décodé,
         // le thread audio ne fera que des `.read().unwrap()`, ce qui n'est pas bloquant entre lecteurs.
-        let full_buffer_data: Arc<std::sync::RwLock<Vec<_>>> = Arc::new(std::sync::RwLock::new(Vec::new()));
+        let initial_fb_cap = total_secs
+            .map(|s| {
+                let bytes = s * output_sample_rate as f64 * output_channels as f64 * 4.0;
+                if bytes > 0.0 && bytes <= (256 * 1024 * 1024) as f64 {
+                    (bytes / 4.0) as usize
+                } else {
+                    0
+                }
+            })
+            .unwrap_or(0);
+        let full_buffer_data: Arc<std::sync::RwLock<Vec<f32>>> =
+            Arc::new(std::sync::RwLock::new(Vec::with_capacity(initial_fb_cap)));
         let full_buffer_cursor: Arc<AtomicUsize> = Arc::new(AtomicUsize::new(0));
         let is_full_buffer_ready: Arc<AtomicBool> = Arc::new(AtomicBool::new(false));
 
@@ -778,6 +802,17 @@ impl AudioPlayer {
             current_source.store(1, Ordering::Relaxed);
 
             let _ = app_handle.emit("playback-preparing", false);
+
+            if is_stopped.load(Ordering::Relaxed) {
+                let _ = decoder_handle.join();
+                if playback_gen.load(Ordering::SeqCst) == my_gen {
+                    is_stopped.store(false, Ordering::SeqCst);
+                    is_playing.store(false, Ordering::SeqCst);
+                    current_position.store(0.0_f64.to_bits(), Ordering::Relaxed);
+                    is_stream_alive.store(false, Ordering::SeqCst);
+                }
+                return Ok(());
+            }
         } else {
             startup.mark("lancement du décodeur");
             log::debug!("⏳ Attente du premier bloc audio...");
@@ -928,11 +963,14 @@ impl AudioPlayer {
         let preload_fmt = crate::core::audio_player::preload::StreamFormat {
             source_rate: source_sample_rate,
             source_channels: channels,
-            output_rate: output_sample_rate,
-            output_channels,
+            source_bits: profondeur,
+            output_rate: effective_output_rate,
+            output_channels: effective_output_channels,
+            output_bits: audio_output.bits_exacts(),
+            is_exclusive: audio_output.backend().is_bit_perfect_capable(),
         };
         let can_preload =
-            crate::core::audio_player::preload::gapless_enabled() && !force_full_decode && cue_slice.is_none();
+            crate::core::audio_player::preload::gapless_enabled() && !force_full_decode;
 
         // Chemin de la piste réellement en cours : change à chaque promotion.
         let mut playing_path: PathBuf = original_file_path.clone();
@@ -1006,7 +1044,7 @@ impl AudioPlayer {
                 let max_seek = if cue_end > cue_start {
                     cue_end
                 } else {
-                    total_dur.max(0.0)
+                    cue_start + total_dur.max(0.0)
                 };
                 let min_seek = if cue_end > cue_start {
                     cue_start
@@ -1042,6 +1080,8 @@ impl AudioPlayer {
 
             // Le callback a peut-être déjà enchaîné : il ne reste que le suivi.
             if let Some(done) = crate::core::audio_player::preload::take_promotion() {
+                cue_start_secs.store(0.0_f64.to_bits(), Ordering::Relaxed);
+                cue_end_secs.store(0.0_f64.to_bits(), Ordering::Relaxed);
                 total_duration.store(done.duration_secs.to_bits(), Ordering::Relaxed);
                 playing_path = done.path.clone();
                 crate::core::network_player::airplay::sender::now_playing(done.path.clone());
@@ -1106,6 +1146,8 @@ impl AudioPlayer {
                     crate::core::audio_player::replay_gain::promote(next.rg);
 
                     total_duration.store(next_secs.to_bits(), Ordering::Relaxed);
+                    cue_start_secs.store(0.0_f64.to_bits(), Ordering::Relaxed);
+                    cue_end_secs.store(0.0_f64.to_bits(), Ordering::Relaxed);
                     current_position_frames.store(0, Ordering::Relaxed);
                     current_position.store(0.0_f64.to_bits(), Ordering::Relaxed);
                     playing_path = next_path.clone();
@@ -1178,19 +1220,18 @@ impl AudioPlayer {
         // tombe, `stop()` rend la main et la piste suivante démarre — ces
         // drapeaux sont alors les siens. Après, on écrasait son `is_playing`
         // (une seconde lecture pouvait partir par-dessus) et sa position.
-        is_stopped.store(false, Ordering::SeqCst);
-        is_playing.store(false, Ordering::SeqCst);
-        current_position.store(0.0_f64.to_bits(), Ordering::Relaxed);
-        current_position_frames.store(0, Ordering::Relaxed);
-        full_buffer_cursor.store(0, Ordering::Relaxed);
-        is_stream_alive.store(false, Ordering::SeqCst);
-        
+        let gen_current = playback_gen.load(Ordering::SeqCst) == my_gen;
+        if gen_current {
+            is_stopped.store(false, Ordering::SeqCst);
+            is_playing.store(false, Ordering::SeqCst);
+            current_position.store(0.0_f64.to_bits(), Ordering::Relaxed);
+            current_position_frames.store(0, Ordering::Relaxed);
+            full_buffer_cursor.store(0, Ordering::Relaxed);
+            is_stream_alive.store(false, Ordering::SeqCst);
+        }
+
         // Le préchargement en vol n'a plus d'objet : on l'annule et on attend
         // sa sortie, pour ne pas laisser un thread décoder dans le vide.
-        //
-        // L'annonce est gardée dans les deux cas : sur un arrêt, l'interface a
-        // souvent déjà annoncé la suite de la NOUVELLE lecture, et ne la renvoie
-        // pas (même chemin). L'effacer privait son premier enchaînement de blanc.
         crate::core::audio_player::preload::abort_current_decode();
         if let Some(h) = preload_handle.take() {
             let _ = h.join();
@@ -1199,7 +1240,7 @@ impl AudioPlayer {
         // Envoyer un signal au frontend. On renvoie le chemin de la piste
         // RÉELLEMENT en cours : après un ou plusieurs enchaînements, ce n'est
         // plus celle par laquelle la lecture a commencé.
-        if !user_stopped {
+        if !user_stopped && gen_current {
             if let Err(e) = app_handle.emit("playback-ended", playing_path.to_string_lossy().to_string()) {
                 log::error!("❌ Erreur d'envoi de l'event Tauri : {}", e);
             }
@@ -1216,6 +1257,8 @@ impl AudioPlayer {
     fn play_dsd_file_thread(
         app_handle: AppHandle,
         file_path: PathBuf,
+        original_file_path: PathBuf,
+        cue_slice: Option<crate::core::cue::CueUriInfo>,
         is_paused: Arc<AtomicBool>,
         is_playing: Arc<AtomicBool>,
         is_stopped: Arc<AtomicBool>,
@@ -1225,11 +1268,15 @@ impl AudioPlayer {
         volume: Arc<AtomicU8>,
         selected_device_name: Option<String>,
         seek_position: Arc<AtomicU64>,
+        cue_start_secs: Arc<AtomicU64>,
+        cue_end_secs: Arc<AtomicU64>,
+        playback_gen: Arc<AtomicU64>,
+        my_gen: u64,
     ) -> Result<(), Box<dyn std::error::Error>> {
-        log::debug!("🎵 [DSD] Fichier sélectionné : {:?}", file_path);
+        log::debug!("🎵 [DSD] Fichier sélectionné : {:?}", original_file_path);
 
         // Morceau distant : son fichier du cache, complet (la préparation l'a attendu entier).
-        // `file_path` reste le repère renvoyé à l'interface.
+        // `original_file_path` reste le repère renvoyé à l'interface.
         let source = crate::core::subsonic::stream::cached(&file_path).unwrap_or_else(|| file_path.clone());
 
         // ─── 1. Open the right container reader (DSF or DFF) → boxed trait object ───
@@ -1253,7 +1300,12 @@ impl AudioPlayer {
 
         let dsd_rate = decoder.sample_rate();
         let channel_count = decoder.channel_count();
-        let duration = decoder.duration_seconds();
+        let full_duration = decoder.duration_seconds();
+        let duration = if let Some(ref slice) = cue_slice {
+            (slice.end_secs.unwrap_or(full_duration) - slice.start_secs).max(0.0)
+        } else {
+            full_duration
+        };
         total_duration.store(duration.to_bits(), Ordering::Relaxed);
 
         // ─── Replay Gain (voie DSD→PCM uniquement) ───
@@ -1340,13 +1392,14 @@ impl AudioPlayer {
                         carrier,
                         device_full_name
                     );
-                    let lsb_first = ext == "dsf";
+                    // DffDecoder::read_next_blocks normalise déjà en LSB-first comme DsfDecoder.
+                    let lsb_first = true;
                     return Self::run_dsd_dop_thread(
                         app_handle,
                         output::dop_engine::CibleDop::Wasapi { device_name: device_full_name.clone() },
                         "WASAPI DoP",
                         decoder,
-                        file_path,
+                        original_file_path,
                         lsb_first,
                         dsd_rate,
                         channel_count,
@@ -1360,6 +1413,10 @@ impl AudioPlayer {
                         current_position,
                         total_duration,
                         seek_position,
+                        cue_start_secs,
+                        cue_end_secs,
+                        playback_gen,
+                        my_gen,
                     );
                 } else {
                     log::warn!(
@@ -1439,13 +1496,14 @@ impl AudioPlayer {
                             hw_id,
                             if reutilise { " — moteur réutilisé" } else { "" }
                         );
-                        let lsb_first = ext == "dsf";
+                        // DffDecoder::read_next_blocks normalise déjà en LSB-first comme DsfDecoder.
+                        let lsb_first = true;
                         return Self::run_dsd_dop_thread(
                             app_handle,
                             output::dop_engine::CibleDop::Alsa { hw_id, reservation },
                             "ALSA DoP",
                             decoder,
-                            file_path,
+                            original_file_path,
                             lsb_first,
                             dsd_rate,
                             channel_count,
@@ -1459,6 +1517,10 @@ impl AudioPlayer {
                             current_position,
                             total_duration,
                             seek_position,
+                            cue_start_secs,
+                            cue_end_secs,
+                            playback_gen,
+                            my_gen,
                         );
                     } else {
                         log::warn!(
@@ -1538,13 +1600,13 @@ impl AudioPlayer {
                             device_id,
                             if reutilise { " — moteur réutilisé" } else { "" }
                         );
-                        let lsb_first = ext == "dsf";
+                        let lsb_first = true;
                         return Self::run_dsd_dop_thread(
                             app_handle,
                             output::dop_engine::CibleDop::CoreAudio { device: device.clone(), device_id },
                             "CoreAudio DoP",
                             decoder,
-                            file_path,
+                            original_file_path,
                             lsb_first,
                             dsd_rate,
                             channel_count,
@@ -1558,6 +1620,10 @@ impl AudioPlayer {
                             current_position,
                             total_duration,
                             seek_position,
+                            cue_start_secs,
+                            cue_end_secs,
+                            playback_gen,
+                            my_gen,
                         );
                     } else {
                         // Le détail du refus (canaux ou rates déclarés) est
@@ -1712,12 +1778,27 @@ impl AudioPlayer {
         //   - Autres : taille par durée (1-5s) → pas assez pour pre-decode
         //     mais permet de lancer la lecture rapidement.
         let profile = crate::core::audio_quality::current_profile();
-        let force_full_decode = matches!(
+        let est_full_bytes =
+            (duration.max(0.0) * output_sample_rate as f64 * output_channels as f64 * 4.0) as u64;
+        const MAX_DSD_FULL_DECODE_BYTES: u64 = 512 * 1024 * 1024;
+        let force_full_decode = if matches!(
             profile,
             crate::core::audio_quality::AudioQualityProfile::Minimal
-        );
+        ) {
+            if est_full_bytes > MAX_DSD_FULL_DECODE_BYTES {
+                log::warn!(
+                    "⚠️ [DSD] Piste trop volumineuse ({:.0} Mo > 512 Mo) pour le pré-décodage complet : lecture en streaming",
+                    est_full_bytes as f64 / (1024.0 * 1024.0)
+                );
+                false
+            } else {
+                true
+            }
+        } else {
+            false
+        };
         let ring_secs = if force_full_decode {
-            (duration as f32) + 2.0
+            4.0
         } else {
             profile.ring_buffer_seconds()
         };
@@ -1742,6 +1823,8 @@ impl AudioPlayer {
         let current_position_frames_dec = current_position_frames.clone();
         let total_duration_dec = total_duration.clone();
         let seek_flush_dec = seek_flush.clone();
+        let cue_start_dec = cue_start_secs.clone();
+        let cue_end_dec = cue_end_secs.clone();
 
         let decoder_handle = std::thread::spawn(move || {
             run_dsd_playback(
@@ -1754,36 +1837,38 @@ impl AudioPlayer {
                 current_position_frames_dec,
                 total_duration_dec,
                 seek_flush_dec,
+                cue_start_dec,
+                cue_end_dec,
             )
         });
 
-        // ─── 6. Wait for pre-fill (Minimal = pre-decode complet) ───
-        // Stratégie selon le profil :
-        //   - Minimal : attendre que le thread décodeur ait FINI (pre-decode
-        //     complet du fichier dans le ring buffer). Garanti sans underrun.
-        //   - Autres  : attendre `pre_fill_ratio` de remplissage (25-40 %) puis
-        //     lancer CPAL — démarrage rapide, lecture en streaming.
+        // ─── 6. Wait for pre-fill (Minimal = pre-decode complet par vidage incrémental) ───
         if force_full_decode {
             log::info!("⏳ [DSD] Profil Minimal : pré-décodage complet du fichier en RAM...");
             let _ = app_handle.emit("playback-preparing", true);
             let prep_start = std::time::Instant::now();
-            // Total = durée × sample rate × ch × 4 octets (f32).
-            let total_bytes = (duration
-                * output_sample_rate as f64
-                * output_channels as f64
-                * 4.0) as u64;
+            let total_bytes = est_full_bytes;
+            let mut drained: Vec<f32> = Vec::with_capacity((est_full_bytes / 4) as usize);
+            let mut scratch_drain = [0.0f32; 16_384];
             let mut last_emit = std::time::Instant::now();
             while !decoder_handle.is_finished() {
                 if is_stopped.load(Ordering::Relaxed) {
                     log::debug!("⏹ Stop pendant pre-decode DSD");
                     break;
                 }
-                std::thread::sleep(std::time::Duration::from_millis(100));
+                let avail = consumer.occupied_len();
+                if avail > 0 {
+                    let want = avail.min(scratch_drain.len());
+                    let n = consumer.pop_slice(&mut scratch_drain[..want]);
+                    drained.extend_from_slice(&scratch_drain[..n]);
+                } else {
+                    std::thread::sleep(std::time::Duration::from_millis(10));
+                }
 
                 // Emit progress toutes les 200 ms.
                 if last_emit.elapsed().as_millis() >= 200 {
                     last_emit = std::time::Instant::now();
-                    let decoded_bytes = consumer.occupied_len() as u64 * 4;
+                    let decoded_bytes = drained.len() as u64 * 4;
                     let _ = app_handle.emit(
                         "playback-preparing-progress",
                         serde_json::json!({
@@ -1793,27 +1878,19 @@ impl AudioPlayer {
                     );
                 }
             }
+            while consumer.occupied_len() > 0 {
+                let want = consumer.occupied_len().min(scratch_drain.len());
+                let n = consumer.pop_slice(&mut scratch_drain[..want]);
+                if n == 0 {
+                    break;
+                }
+                drained.extend_from_slice(&scratch_drain[..n]);
+            }
+            drop(consumer);
             log::info!(
-                "✅ [DSD] Pré-décodage terminé en {:.2}s",
-                prep_start.elapsed().as_secs_f64()
-            );
-
-            // ─── 6b. Drain ring buffer → Vec<f32> (FullBuffer mode) ───
-            // Le ring buffer contient tout le fichier décodé (consumer.occupied_len()
-            // = nombre total de samples f32 stéréo). On le vide dans un Vec<f32>
-            // pour que CPAL puisse y lire à n'importe quel index → seek instantané.
-            // Sans ça, le ring buffer est FIFO et le seek arrière est impossible.
-            let drain_len = consumer.occupied_len();
-            let mut drained: Vec<f32> = vec![0.0f32; drain_len];
-            let drained_n = consumer.pop_slice(&mut drained);
-            drop(consumer); // plus utilisé en mode FullBuffer
-            // Si pop_slice a retourné moins que prévu (peu probable, mais
-            // possible si stop pendant pre-decode), on tronque pour ne pas
-            // jouer des zéros à la fin du buffer.
-            drained.truncate(drained_n);
-            log::debug!(
-                "📦 [DSD-FullBuffer] {} samples drainés ({:.1} Mo), prêt pour seek instantané",
-                drained_n,
+                "✅ [DSD] Pré-décodage terminé en {:.2}s ({} samples, {:.1} Mo)",
+                prep_start.elapsed().as_secs_f64(),
+                drained.len(),
                 drained.len() as f32 * 4.0 / 1024.0 / 1024.0
             );
 
@@ -1829,6 +1906,23 @@ impl AudioPlayer {
             }
 
             let _ = app_handle.emit("playback-preparing", false);
+
+            if is_stopped.load(Ordering::Relaxed) {
+                if playback_gen.load(Ordering::SeqCst) == my_gen {
+                    is_stopped.store(false, Ordering::SeqCst);
+                    is_playing.store(false, Ordering::SeqCst);
+                    current_position.store(0.0_f64.to_bits(), Ordering::Relaxed);
+                    current_position_frames.store(0, Ordering::Relaxed);
+                    is_stream_alive.store(false, Ordering::SeqCst);
+                }
+                return Ok(());
+            }
+
+            // FullBuffer contient exactement la tranche demandée depuis l'index 0.
+            cue_start_secs.store(0.0_f64.to_bits(), Ordering::Relaxed);
+            cue_end_secs.store(0.0_f64.to_bits(), Ordering::Relaxed);
+            current_position_frames.store(0, Ordering::Relaxed);
+            current_position.store(0.0_f64.to_bits(), Ordering::Relaxed);
 
             // ─── 7. Build CPAL stream FullBuffer ───
             is_playing.store(true, Ordering::SeqCst);
@@ -1954,17 +2048,19 @@ impl AudioPlayer {
             drop(stream);
 
             let user_stopped = is_stopped.load(Ordering::Relaxed);
-            // Remise à zéro avant le signal de fin : voir la fin du chemin PCM.
-            is_stopped.store(false, Ordering::SeqCst);
-            is_playing.store(false, Ordering::SeqCst);
-            current_position.store(0.0_f64.to_bits(), Ordering::Relaxed);
-            current_position_frames.store(0, Ordering::Relaxed);
-            is_stream_alive.store(false, Ordering::SeqCst);
+            let gen_current = playback_gen.load(Ordering::SeqCst) == my_gen;
+            if gen_current {
+                is_stopped.store(false, Ordering::SeqCst);
+                is_playing.store(false, Ordering::SeqCst);
+                current_position.store(0.0_f64.to_bits(), Ordering::Relaxed);
+                current_position_frames.store(0, Ordering::Relaxed);
+                is_stream_alive.store(false, Ordering::SeqCst);
+            }
 
-            if !user_stopped {
+            if !user_stopped && gen_current {
                 if let Err(e) = app_handle.emit(
                     "playback-ended",
-                    file_path.to_string_lossy().to_string(),
+                    original_file_path.to_string_lossy().to_string(),
                 ) {
                     log::error!("❌ Erreur d'envoi de l'event Tauri : {}", e);
                 }
@@ -2014,7 +2110,7 @@ impl AudioPlayer {
                 sortie,
                 decoder_handle,
                 &app_handle,
-                &file_path,
+                &original_file_path,
                 duration,
                 output_sample_rate,
                 &current_position_frames,
@@ -2023,6 +2119,10 @@ impl AudioPlayer {
                 &is_paused,
                 &is_playing,
                 &is_stream_alive,
+                &cue_start_secs,
+                &cue_end_secs,
+                &playback_gen,
+                my_gen,
             );
         }
 
@@ -2103,7 +2203,7 @@ impl AudioPlayer {
             stream,
             decoder_handle,
             &app_handle,
-            &file_path,
+            &original_file_path,
             duration,
             output_sample_rate,
             &current_position_frames,
@@ -2112,12 +2212,16 @@ impl AudioPlayer {
             &is_paused,
             &is_playing,
             &is_stream_alive,
+            &cue_start_secs,
+            &cue_end_secs,
+            &playback_gen,
+            my_gen,
         )
     }
 
     /// Fin d'une lecture DSD en décodage direct, quelle que soit la sortie (flux
-    /// CPAL ou rendu exclusif) : attend la fin du décodage puis celle du rendu,
-    /// relâche la sortie, prévient l'interface.
+    /// CPAL ou rendu exclusif) : met à jour la position en direct pendant le
+    /// décodage puis attend la fin du rendu, relâche la sortie, prévient l'interface.
     #[allow(clippy::too_many_arguments)]
     fn finish_dsd_playback<S, E: std::fmt::Display>(
         stream: S,
@@ -2132,23 +2236,19 @@ impl AudioPlayer {
         is_paused: &AtomicBool,
         is_playing: &AtomicBool,
         is_stream_alive: &AtomicBool,
+        cue_start_secs: &AtomicU64,
+        cue_end_secs: &AtomicU64,
+        playback_gen: &AtomicU64,
+        my_gen: u64,
     ) -> Result<(), Box<dyn std::error::Error>> {
         // Safety : re-émettre preparing: false en cas d'event perdu (cf. path Symphonia).
         let _ = app_handle.emit("playback-preparing", false);
 
-        // ─── 8. Wait for end of decode + drain ring buffer ───
-        match decoder_handle.join() {
-            Ok(Ok(_)) => log::debug!("🎵 [DSD] Décodage terminé"),
-            Ok(Err(e)) => log::error!("❌ [DSD] Erreur thread décodage: {}", e),
-            Err(_) => log::error!("❌ [DSD] Panic dans le thread"),
-        }
-
-        // Wait for the CPAL callback to drain the ring buffer.
-        // We can't peek the consumer from here (it was moved into the closure),
-        // so we compare the played frames count against the expected total.
-        let total_frames_expected = (duration * output_sample_rate as f64) as usize;
-        // Le décodage rend souvent un peu moins que la durée annoncée : sans ce repli,
-        // la fin n'arrivait jamais et la file ne passait pas au morceau suivant.
+        // Surveiller la lecture ET mettre à jour `current_position` EN DIRECT
+        // pendant que le décodeur pousse vers le ring buffer (ne surtout pas
+        // `join()` avant la boucle sinon la position reste figée à 0.0).
+        let cue_start_init = f64::from_bits(cue_start_secs.load(Ordering::Relaxed)).max(0.0);
+        let total_frames_expected = ((cue_start_init + duration) * output_sample_rate as f64) as usize;
         let mut last_frames = usize::MAX;
         let mut idle_polls = 0;
         loop {
@@ -2159,11 +2259,20 @@ impl AudioPlayer {
             let new_pos = frames as f64 / output_sample_rate as f64;
             current_position.store(new_pos.to_bits(), Ordering::Relaxed);
 
-            if is_stopped.load(Ordering::Relaxed) || frames >= total_frames_expected {
+            let cue_start = f64::from_bits(cue_start_secs.load(Ordering::Relaxed));
+            let cue_end = f64::from_bits(cue_end_secs.load(Ordering::Relaxed));
+            if cue_end > cue_start && new_pos >= cue_end {
                 break;
             }
-            // Tampon vidé : plus rien ne joue depuis 1 s, hors pause.
-            if frames == last_frames && !is_paused.load(Ordering::Relaxed) {
+
+            let decoder_done = decoder_handle.is_finished();
+            if is_stopped.load(Ordering::Relaxed)
+                || (decoder_done && frames >= total_frames_expected)
+            {
+                break;
+            }
+            // Tampon vidé après fin du décodeur : plus rien ne joue depuis 1 s, hors pause.
+            if decoder_done && frames == last_frames && !is_paused.load(Ordering::Relaxed) {
                 idle_polls += 1;
                 if idle_polls >= 10 {
                     log::debug!("✅ [DSD] Fin du tampon ({frames}/{total_frames_expected} trames)");
@@ -2175,21 +2284,32 @@ impl AudioPlayer {
             last_frames = frames;
         }
 
+        // Joindre le décodeur uniquement après arrêt / fin de lecture.
+        let user_stopped = is_stopped.load(Ordering::Relaxed);
+        if cue_end_secs.load(Ordering::Relaxed) != 0 && !user_stopped {
+            // Fin d'une plage CUE : demander au décodeur DSD de s'arrêter proprement.
+            is_stopped.store(true, Ordering::SeqCst);
+        }
+        match decoder_handle.join() {
+            Ok(Ok(_)) => log::debug!("🎵 [DSD] Décodage terminé"),
+            Ok(Err(e)) => log::error!("❌ [DSD] Erreur thread décodage: {}", e),
+            Err(_) => log::error!("❌ [DSD] Panic dans le thread"),
+        }
+
         log::debug!("✅ [DSD] Lecture terminée");
 
-        // Le rendu exclusif lève `is_stopped` en se refermant : l'intention se
-        // lit avant.
-        let user_stopped = is_stopped.load(Ordering::Relaxed);
         drop(stream);
 
-        // Remise à zéro avant le signal de fin : voir la fin du chemin PCM.
-        is_stopped.store(false, Ordering::SeqCst);
-        is_playing.store(false, Ordering::SeqCst);
-        current_position.store(0.0_f64.to_bits(), Ordering::Relaxed);
-        current_position_frames.store(0, Ordering::Relaxed);
-        is_stream_alive.store(false, Ordering::SeqCst);
+        let gen_current = playback_gen.load(Ordering::SeqCst) == my_gen;
+        if gen_current {
+            is_stopped.store(false, Ordering::SeqCst);
+            is_playing.store(false, Ordering::SeqCst);
+            current_position.store(0.0_f64.to_bits(), Ordering::Relaxed);
+            current_position_frames.store(0, Ordering::Relaxed);
+            is_stream_alive.store(false, Ordering::SeqCst);
+        }
 
-        if !user_stopped {
+        if !user_stopped && gen_current {
             if let Err(e) =
                 app_handle.emit("playback-ended", file_path.to_string_lossy().to_string())
             {
@@ -2222,6 +2342,10 @@ impl AudioPlayer {
         current_position: Arc<AtomicU64>,
         total_duration: Arc<AtomicU64>,
         seek_position: Arc<AtomicU64>,
+        cue_start_secs: Arc<AtomicU64>,
+        cue_end_secs: Arc<AtomicU64>,
+        playback_gen: Arc<AtomicU64>,
+        my_gen: u64,
     ) -> Result<(), Box<dyn std::error::Error>> {
         use crate::core::audio_player::output::dop_engine;
 
@@ -2242,12 +2366,16 @@ impl AudioPlayer {
             lsb_first,
             seek_position.clone(),
             total_duration.clone(),
+            cue_start_secs.clone(),
+            cue_end_secs.clone(),
         ) {
             Ok(v) => v,
             Err(e) => {
                 log::error!("❌ Moteur DoP indisponible: {e}");
                 let _ = app_handle.emit("playback-preparing", false);
-                is_playing.store(false, Ordering::SeqCst);
+                if playback_gen.load(Ordering::SeqCst) == my_gen {
+                    is_playing.store(false, Ordering::SeqCst);
+                }
                 return Err(format!("DoP engine: {e}").into());
             }
         };
@@ -2286,7 +2414,8 @@ impl AudioPlayer {
         // ─── Attente fin de piste : position + dé-figeage compteur ───
         let mut preparing_cleared = !warmup_needed;
         let wait_start = std::time::Instant::now();
-        let total_frames_expected = (duration * carrier_rate as f64) as usize;
+        let cue_start_init = f64::from_bits(cue_start_secs.load(Ordering::Relaxed)).max(0.0);
+        let total_frames_expected = ((cue_start_init + duration) * carrier_rate as f64) as usize;
         let end_threshold = total_frames_expected.saturating_sub(carrier_rate as usize / 4);
         let mut user_stopped = false;
         loop {
@@ -2310,6 +2439,15 @@ impl AudioPlayer {
                 user_stopped = true;
                 break;
             }
+            if !handle.render_alive.load(Ordering::Acquire) {
+                user_stopped = true;
+                break;
+            }
+            let cue_start = f64::from_bits(cue_start_secs.load(Ordering::Relaxed));
+            let cue_end = f64::from_bits(cue_end_secs.load(Ordering::Relaxed));
+            if cue_end > cue_start && new_pos >= cue_end {
+                break;
+            }
             if handle.decoder_done.load(Ordering::Relaxed) && frames >= end_threshold {
                 break;
             }
@@ -2323,18 +2461,20 @@ impl AudioPlayer {
         dop_engine::end_current_track_on_engine(user_stopped);
 
         log::debug!("✅ [DoP] Fin de piste (moteur gardé vivant, user_stopped={user_stopped})");
-        // Remise à zéro avant le signal de fin : voir la fin du chemin PCM.
-        is_stopped.store(false, Ordering::SeqCst);
-        is_playing.store(false, Ordering::SeqCst);
-        current_position.store(0.0_f64.to_bits(), Ordering::Relaxed);
-        is_stream_alive.store(false, Ordering::SeqCst);
+        let gen_current = playback_gen.load(Ordering::SeqCst) == my_gen;
+        if gen_current {
+            is_stopped.store(false, Ordering::SeqCst);
+            is_playing.store(false, Ordering::SeqCst);
+            current_position.store(0.0_f64.to_bits(), Ordering::Relaxed);
+            is_stream_alive.store(false, Ordering::SeqCst);
+        }
 
         if !preparing_cleared {
             let _ = app_handle.emit("playback-preparing", false);
         }
 
         // playback-ended seulement sur fin naturelle (→ le frontend enchaîne).
-        if !user_stopped {
+        if !user_stopped && gen_current {
             if let Err(e) =
                 app_handle.emit("playback-ended", file_path.to_string_lossy().to_string())
             {
@@ -2444,9 +2584,15 @@ where
     let mut fill_pos: Option<usize> = None;
     let mut deferred_seek: Option<usize> = None;
     let mut tail_flushed = false;
+    let mut fb_batch: Vec<f32> = Vec::with_capacity(16_384);
 
     loop {
         if is_stopped.load(Ordering::Relaxed) {
+            if !fb_batch.is_empty() {
+                let mut fb = full_buffer_data.write().unwrap_or_else(|e| e.into_inner());
+                fb.extend_from_slice(&fb_batch);
+                fb_batch.clear();
+            }
             log::debug!("Stop détecté — on quitte le décodage");
             break;
         }
@@ -2455,6 +2601,11 @@ where
         let seek_bits = seek_position.load(Ordering::Relaxed);
         if seek_bits != u64::MAX {
             seek_position.store(u64::MAX, Ordering::Relaxed);
+            if !fb_batch.is_empty() {
+                let mut fb = full_buffer_data.write().unwrap_or_else(|e| e.into_inner());
+                fb.extend_from_slice(&fb_batch);
+                fb_batch.clear();
+            }
 
             let total_dur = f64::from_bits(total_duration.load(Ordering::Relaxed));
             let cue_start = f64::from_bits(cue_start_secs.load(Ordering::Relaxed));
@@ -2462,7 +2613,7 @@ where
             let max_seek = if cue_end > cue_start {
                 cue_end
             } else {
-                total_dur.max(0.0)
+                cue_start + total_dur.max(0.0)
             };
             let min_seek = if cue_end > cue_start {
                 cue_start
@@ -2573,6 +2724,11 @@ where
         let packet: symphonia::core::packet::Packet = match format.next_packet() {
             Ok(Some(p)) => p,
             Ok(None) => {
+                if !fb_batch.is_empty() {
+                    let mut fb = full_buffer_data.write().unwrap_or_else(|e| e.into_inner());
+                    fb.extend_from_slice(&fb_batch);
+                    fb_batch.clear();
+                }
                 if fill_pos.is_some() {
                     log::warn!("Fin du fichier avant la fin du début à combler");
                     break;
@@ -2685,35 +2841,32 @@ where
             continue;
         }
         {
-            // On récupère le lock en écriture (ça va très vite, CPAL ne fait que lire)
-            let mut fb = full_buffer_data.write().unwrap_or_else(|e| e.into_inner());
-            fb.extend_from_slice(&adapted_samples);
+            fb_batch.extend_from_slice(&adapted_samples);
+            let fb_ready = is_full_buffer_ready.load(Ordering::Relaxed);
+            if !fb_ready || fb_batch.len() >= 16_384 {
+                let mut fb = full_buffer_data.write().unwrap_or_else(|e| e.into_inner());
+                fb.extend_from_slice(&fb_batch);
+                fb_batch.clear();
 
-            if !is_full_buffer_ready.load(Ordering::Relaxed) {
-                const SAFETY_MARGIN: usize = 2000;
+                if !fb_ready {
+                    const SAFETY_MARGIN: usize = 2000;
 
-                // On calcule le nombre de samples déjà joués grâce à l'AtomicUsize
-                let played_frames: usize = current_position_frames.load(Ordering::Relaxed);
-                let played_samples: usize = played_frames * output_channels as usize;
+                    // On calcule le nombre de samples déjà joués grâce à l'AtomicUsize
+                    let played_frames: usize = current_position_frames.load(Ordering::Relaxed);
+                    let played_samples: usize = played_frames * output_channels as usize;
 
-                if fb.len() > played_samples + SAFETY_MARGIN {
-                    // Le FullBuffer reprend là où en est la lecture. Tant qu'on
-                    // lit le ring buffer, le curseur ne bouge pas : resté à 0, il
-                    // faisait repartir le morceau du début dès que la bascule
-                    // arrivait après les premiers échantillons. C'est le cas avec
-                    // le serveur son (CPAL PulseAudio), qui préremplit près d'une
-                    // seconde d'un coup avant que le décodeur passe devant.
-                    // Curseur d'abord : la sortie ne lit la source 1 qu'après.
-                    full_buffer_cursor.store(played_samples, Ordering::Release);
-                    is_full_buffer_ready.store(true, Ordering::Relaxed);
+                    if fb.len() > played_samples + SAFETY_MARGIN {
+                        full_buffer_cursor.store(played_samples, Ordering::Release);
+                        is_full_buffer_ready.store(true, Ordering::Relaxed);
 
-                    // On bascule sur le FullBuffer (1 = FullBuffer)
-                    current_source.store(1, Ordering::Release);
+                        // On bascule sur le FullBuffer (1 = FullBuffer)
+                        current_source.store(1, Ordering::Release);
 
-                    log::debug!(
-                        "🚀 FullBuffer prêt ! ({} samples) - Basculement effectué",
-                        fb.len()
-                    );
+                        log::debug!(
+                            "🚀 FullBuffer prêt ! ({} samples) - Basculement effectué",
+                            fb.len()
+                        );
+                    }
                 }
             }
         }
@@ -2750,6 +2903,12 @@ where
                 }
             }
         }
+    }
+
+    if !fb_batch.is_empty() {
+        let mut fb = full_buffer_data.write().unwrap_or_else(|e| e.into_inner());
+        fb.extend_from_slice(&fb_batch);
+        fb_batch.clear();
     }
 
     if !tail_flushed && !is_stopped.load(Ordering::Relaxed) && seek_position.load(Ordering::Relaxed) == u64::MAX {

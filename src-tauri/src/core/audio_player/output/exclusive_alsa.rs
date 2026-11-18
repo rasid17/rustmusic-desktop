@@ -50,9 +50,12 @@ const CANDIDATE_FORMATS: [Format; 2] = [Format::S32LE, Format::S16LE];
 /// Ouvre le PCM `hw:` en réessayant sur EBUSY : après une réservation D-Bus,
 /// PipeWire ferme le device de façon asynchrone (quelques centaines de ms,
 /// parfois plusieurs secondes). Même stratégie que le DoP ALSA : ~6 s.
-fn open_hw_pcm(hw_id: &str) -> Result<PCM, String> {
+fn open_hw_pcm(hw_id: &str, stop_signal: Option<&AtomicBool>) -> Result<PCM, String> {
     let mut last = String::new();
     for _ in 0..60 {
+        if stop_signal.is_some_and(|s| s.load(Ordering::Relaxed)) {
+            return Err("arrêt demandé".into());
+        }
         match PCM::new(hw_id, Direction::Playback, false) {
             Ok(pcm) => return Ok(pcm),
             Err(e) => {
@@ -128,7 +131,7 @@ pub fn probe(hw_id: &str, rate: u32, channels: u16) -> Result<AlsaNegotiation, R
             .ok()
     });
 
-    let pcm = match open_hw_pcm(hw_id) {
+    let pcm = match open_hw_pcm(hw_id, None) {
         Ok(pcm) => pcm,
         Err(e) => {
             log::info!("🎚️  ALSA exclusive : ouverture de {hw_id} impossible ({e}) → CPAL partagé");
@@ -170,6 +173,8 @@ pub struct AlsaExclusiveOutput {
     is_stopped: Arc<AtomicBool>,
     /// Mis à `true` par le thread une fois le stream réellement ouvert.
     started: Arc<AtomicBool>,
+    /// Erreur d'ouverture éventuelle survenue avant `started = true`.
+    startup_err: Arc<std::sync::Mutex<Option<String>>>,
     device_name: String,
     sample_rate: u32,
     channels: u16,
@@ -197,22 +202,29 @@ impl AlsaExclusiveOutput {
         let is_stopped = atomics.is_stopped.clone();
         let started = Arc::new(AtomicBool::new(false));
         let started_thread = started.clone();
+        let startup_err = Arc::new(std::sync::Mutex::new(None));
+        let startup_err_thread = startup_err.clone();
         let bits_exacts = if matches!(negotiation.format, Format::S16LE) { 16 } else { 24 };
+        let dev_for_thread = device_name.clone();
 
         let handle = std::thread::Builder::new()
             .name("rustmusic-alsa-render".into())
             .spawn(move || {
                 if let Err(e) = render_loop(
                     &hw_id,
+                    &dev_for_thread,
                     negotiation,
                     rate,
                     channels,
                     consumer,
                     atomics,
                     shared,
-                    started_thread,
+                    started_thread.clone(),
                 ) {
                     log::error!("❌ [ALSA exclusive] {e}");
+                    if !started_thread.load(Ordering::Relaxed) {
+                        *startup_err_thread.lock().unwrap_or_else(|p| p.into_inner()) = Some(e);
+                    }
                 }
             })
             .map_err(|e| AudioOutputError::BuildFailed(format!("spawn thread ALSA: {e}")))?;
@@ -221,6 +233,7 @@ impl AlsaExclusiveOutput {
             handle: Some(handle),
             is_stopped,
             started,
+            startup_err,
             device_name,
             sample_rate: rate,
             channels,
@@ -231,20 +244,24 @@ impl AlsaExclusiveOutput {
 
 impl AudioOutput for AlsaExclusiveOutput {
     fn start(&mut self) -> Result<(), AudioOutputError> {
-        // Le thread s'ouvre et joue tout seul ; on attend juste la confirmation
-        // que le stream est bien ouvert pour que l'appelant ne croie pas la
-        // lecture démarrée alors que la carte a été reprise entre-temps.
-        for _ in 0..30 {
-            if self.started.load(Ordering::Relaxed) {
+        // Attendre jusqu'à ~7 s (aligné sur open_hw_pcm 6 s sur EBUSY WirePlumber),
+        // tout en sortant immédiatement en cas d'erreur d'init ou d'arrêt demandé.
+        for _ in 0..350 {
+            if self.started.load(Ordering::Acquire) {
                 return Ok(());
+            }
+            if let Some(err) = self.startup_err.lock().unwrap_or_else(|p| p.into_inner()).take() {
+                return Err(AudioOutputError::StartFailed(err));
             }
             if self.is_stopped.load(Ordering::Relaxed) {
                 break;
             }
             std::thread::sleep(std::time::Duration::from_millis(20));
         }
-        if self.started.load(Ordering::Relaxed) {
+        if self.started.load(Ordering::Acquire) {
             Ok(())
+        } else if let Some(err) = self.startup_err.lock().unwrap_or_else(|p| p.into_inner()).take() {
+            Err(AudioOutputError::StartFailed(err))
         } else {
             Err(AudioOutputError::StartFailed(
                 "le thread ALSA n'a pas confirmé l'ouverture du stream".into(),
@@ -290,6 +307,7 @@ impl Drop for AlsaExclusiveOutput {
 #[allow(clippy::too_many_arguments)]
 fn render_loop<C>(
     hw_id: &str,
+    device_name: &str,
     negotiation: AlsaNegotiation,
     rate: u32,
     channels: u16,
@@ -311,7 +329,8 @@ where
             .ok()
     });
 
-    let pcm = open_hw_pcm(hw_id).map_err(|e| format!("ouverture {hw_id}: {e}"))?;
+    let pcm = open_hw_pcm(hw_id, Some(&atomics.is_stopped))
+        .map_err(|e| format!("ouverture {hw_id}: {e}"))?;
     let period_frames = configure(&pcm, negotiation.format, rate, channels)?;
     pcm.prepare().map_err(|e| format!("prepare: {e}"))?;
 
@@ -320,7 +339,7 @@ where
          ({:?}, bit-perfect)",
         negotiation.format
     );
-    started.store(true, Ordering::Relaxed);
+    started.store(true, Ordering::Release);
 
     let output_channels = shared.output_channels.max(1);
     let chunk_samples = period_frames * ch;
@@ -353,6 +372,7 @@ where
 
             shared.seek_flush.store(false, Ordering::Release);
             fade_in_samples = 2048;
+            let _ = pcm.drop();
             let _ = pcm.prepare();
             continue;
         }
@@ -360,14 +380,20 @@ where
         // ─── Pause : silence, le stream reste ouvert (reprise instantanée) ───
         if atomics.is_paused.load(Ordering::Relaxed) {
             scratch.fill(0.0);
-            write_chunk(
+            if let Err(e) = write_chunk(
                 &pcm,
                 negotiation.format,
                 &scratch,
                 &mut buf_i32,
                 &mut buf_i16,
                 ch,
-            )?;
+            ) {
+                if !atomics.is_stopped.load(Ordering::Relaxed) {
+                    super::shared_engine::notify_lost(device_name, None);
+                    atomics.is_stopped.store(true, Ordering::SeqCst);
+                }
+                return Err(e);
+            }
             continue;
         }
 
@@ -415,14 +441,20 @@ where
             * crate::core::audio_player::replay_gain::current_factor();
         super::samples::apply_gain(&mut scratch, vol, &mut fade_in_samples, 1.0);
 
-        write_chunk(
+        if let Err(e) = write_chunk(
             &pcm,
             negotiation.format,
             &scratch,
             &mut buf_i32,
             &mut buf_i16,
             ch,
-        )?;
+        ) {
+            if !atomics.is_stopped.load(Ordering::Relaxed) {
+                super::shared_engine::notify_lost(device_name, None);
+                atomics.is_stopped.store(true, Ordering::SeqCst);
+            }
+            return Err(e);
+        }
     }
 
     // Laisse le DAC vider ce qui reste plutôt que de couper net.

@@ -158,32 +158,37 @@ export function startMiniBridge(handlers: MiniBridgeHandlers): void {
   );
 
   void (async () => {
+    const track = async <T>(event: string, cb: Parameters<typeof listen<T>>[1]) => {
+      const off = await listen<T>(event, cb);
+      if (!actif) {
+        off();
+        return;
+      }
+      unlistens.push(off);
+    };
+
     // La fenêtre mini se présente : renvoyer l'état complet.
-    unlistens.push(
-      await listen("mini-hello", () => {
-        const p = get(player);
-        dernierePiste = p.pathFile;
-        emitTo("mini", "mini-state-player", { ...p } as PlayerSnapshot).catch(noop);
-        const qs = get(queueState);
-        lastTracksRef = qs.tracks;
-        emitTo("mini", "mini-state-queue", {
-          tracks: qs.tracks,
-          currentIndex: qs.currentIndex,
-          isShuffled: qs.isShuffled,
-          repeatMode: qs.repeatMode,
-        }).catch(noop);
-        const paths = [...get(liked).paths].map((path) => ({ path, liked: true }));
-        prevLiked = new Set(get(liked).paths);
-        emitTo("mini", "mini-state-liked", { changes: paths }).catch(noop);
-      })
-    );
-    unlistens.push(await listen("mini-ready", () => readyResolvers.splice(0).forEach((r) => r(true))));
-    unlistens.push(await listen("mini-window-closed", () => handlers.onMiniClosed()));
-    unlistens.push(
-      await listen<MiniCmdMessage>("mini-cmd", (e) => {
-        void dispatch(e.payload, handlers);
-      })
-    );
+    await track("mini-hello", () => {
+      const p = get(player);
+      dernierePiste = p.pathFile;
+      emitTo("mini", "mini-state-player", { ...p } as PlayerSnapshot).catch(noop);
+      const qs = get(queueState);
+      lastTracksRef = qs.tracks;
+      emitTo("mini", "mini-state-queue", {
+        tracks: qs.tracks,
+        currentIndex: qs.currentIndex,
+        isShuffled: qs.isShuffled,
+        repeatMode: qs.repeatMode,
+      }).catch(noop);
+      const paths = [...get(liked).paths].map((path) => ({ path, liked: true }));
+      prevLiked = new Set(get(liked).paths);
+      emitTo("mini", "mini-state-liked", { changes: paths }).catch(noop);
+    });
+    await track("mini-ready", () => readyResolvers.splice(0).forEach((r) => r(true)));
+    await track("mini-window-closed", () => handlers.onMiniClosed());
+    await track<MiniCmdMessage>("mini-cmd", (e) => {
+      void dispatch(e.payload, handlers);
+    });
   })();
 }
 
@@ -196,21 +201,23 @@ export function stopMiniBridge(): void {
   unsubscribes = [];
   if (queueDebounce) clearTimeout(queueDebounce);
   queueDebounce = null;
-  readyResolvers = [];
+  readyResolvers.splice(0).forEach((r) => r(false));
 }
 
 /** Attend que la fenêtre mini se soit affichée ; `false` à l'expiration du délai. */
 export function waitMiniReady(timeoutMs = 5000): Promise<boolean> {
   return new Promise((resolve) => {
     let done = false;
+    let timeoutId: ReturnType<typeof setTimeout> | null = null;
     const finish = (v: boolean) => {
       if (!done) {
         done = true;
+        if (timeoutId) clearTimeout(timeoutId);
         resolve(v);
       }
     };
     readyResolvers.push(finish);
-    setTimeout(() => finish(false), timeoutMs);
+    timeoutId = setTimeout(() => finish(false), timeoutMs);
   });
 }
 
@@ -356,65 +363,80 @@ export function initMiniClient(onReopen?: () => void): MiniClient {
   };
 
   const miroirLiked = new Set<string>();
+  let disposed = false;
+  let reopenTimer: ReturnType<typeof setTimeout> | null = null;
 
   void (async () => {
-    unlistenFns.push(
-      await listen<PlayerSnapshot>("mini-state-player", (e) => {
-        appliquerSnapshot(e.payload);
-        premier();
+    const track = async <T>(event: string, cb: Parameters<typeof listen<T>>[1]) => {
+      const off = await listen<T>(event, cb);
+      if (disposed) {
+        off();
+        return;
+      }
+      unlistenFns.push(off);
+    };
+
+    await track<PlayerSnapshot>("mini-state-player", (e) => {
+      appliquerSnapshot(e.payload);
+      premier();
+      if (reopenPending) {
+        reopenPending = false;
+        if (reopenTimer) {
+          clearTimeout(reopenTimer);
+          reopenTimer = null;
+        }
+        onReopen?.();
+      }
+    });
+    await track<{ tracks: QueueTrack[]; currentIndex: number; isShuffled?: boolean; repeatMode?: "off" | "all" | "one" }>("mini-state-queue", (e) => {
+      queueState.hydrate(e.payload);
+      premier();
+    });
+    await track<{ currentIndex: number; isShuffled?: boolean; repeatMode?: "off" | "all" | "one" }>("mini-state-index", (e) => {
+      queueState.hydrate(e.payload);
+    });
+    await track<{ changes: { path: string; liked: boolean }[] }>("mini-state-liked", (e) => {
+      for (const c of e.payload.changes) {
+        if (c.liked) miroirLiked.add(c.path);
+        else miroirLiked.delete(c.path);
+      }
+      liked.hydrate(new Set(miroirLiked));
+    });
+    await track("mini-suspend", () => {
+      reopenPending = false;
+      if (reopenTimer) {
+        clearTimeout(reopenTimer);
+        reopenTimer = null;
+      }
+      stopAnimation();
+    });
+    await track("mini-reopen", () => {
+      reopenPending = true;
+      emitTo("main", "mini-hello").catch(noop);
+      if (reopenTimer) clearTimeout(reopenTimer);
+      reopenTimer = setTimeout(() => {
+        reopenTimer = null;
         if (reopenPending) {
           reopenPending = false;
           onReopen?.();
         }
-      })
-    );
-    unlistenFns.push(
-      await listen<{ tracks: QueueTrack[]; currentIndex: number; isShuffled?: boolean; repeatMode?: "off" | "all" | "one" }>("mini-state-queue", (e) => {
-        queueState.hydrate(e.payload);
-        premier();
-      })
-    );
-    unlistenFns.push(
-      await listen<{ currentIndex: number; isShuffled?: boolean; repeatMode?: "off" | "all" | "one" }>("mini-state-index", (e) => {
-        queueState.hydrate(e.payload);
-      })
-    );
-    unlistenFns.push(
-      await listen<{ changes: { path: string; liked: boolean }[] }>("mini-state-liked", (e) => {
-        for (const c of e.payload.changes) {
-          if (c.liked) miroirLiked.add(c.path);
-          else miroirLiked.delete(c.path);
-        }
-        liked.hydrate(new Set(miroirLiked));
-      })
-    );
-    unlistenFns.push(
-      await listen("mini-suspend", () => {
-        reopenPending = false;
-        stopAnimation();
-      })
-    );
-    unlistenFns.push(
-      await listen("mini-reopen", () => {
-        reopenPending = true;
-        emitTo("main", "mini-hello").catch(noop);
-        setTimeout(() => {
-          if (reopenPending) {
-            reopenPending = false;
-            onReopen?.();
-          }
-        }, 120);
-      })
-    );
-    emitTo("main", "mini-hello").catch(noop);
+      }, 120);
+    });
+    if (!disposed) emitTo("main", "mini-hello").catch(noop);
   })();
 
   return {
     firstState,
     dispose: () => {
+      disposed = true;
       clearTimeout(filet);
+      if (reopenTimer) {
+        clearTimeout(reopenTimer);
+        reopenTimer = null;
+      }
       stopAnimation();
       unlistenFns.forEach((f) => f());
+      unlistenFns.length = 0;
     },
   };
 }

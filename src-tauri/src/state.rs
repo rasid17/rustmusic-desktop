@@ -66,7 +66,7 @@ impl AppState {
             .synchronous(SqliteSynchronous::Normal)
             .pragma("cache_size", "-64000")
             .pragma("temp_store", "MEMORY");
-        let pool: sqlx::Pool<sqlx::Sqlite> = SqlitePool::connect_with(options).await?;
+        let pool: sqlx::Pool<sqlx::Sqlite> = SqlitePool::connect_with(options.clone()).await?;
 
         log::debug!("PRAGMAs SQLite configurés (WAL + NORMAL + 64MB cache)");
 
@@ -79,7 +79,21 @@ impl AppState {
         // application qui « ne se lance pas » sans un mot d'explication.
         backup_before_migration(&pool, database_url).await;
 
-        sqlx::migrate!("./SQL/").run(&pool).await?;
+        // Certaines migrations anciennes reconstruisent des tables via DROP TABLE.
+        // Sur SQLite, PRAGMA foreign_keys=ON déclencherait ON DELETE CASCADE.
+        // On exécute donc les migrations pendantes sur une connexion dédiée sans FK,
+        // tout en conservant foreign_keys=ON sur le pool d'exécution.
+        if base_path(database_url).is_some() {
+            let mig_opts = options.clone().foreign_keys(false);
+            let mig_pool = sqlx::sqlite::SqlitePoolOptions::new()
+                .max_connections(1)
+                .connect_with(mig_opts)
+                .await?;
+            sqlx::migrate!("./SQL/").run(&mig_pool).await?;
+            mig_pool.close().await;
+        } else {
+            sqlx::migrate!("./SQL/").run(&pool).await?;
+        }
 
         log::info!("✅ Migrations terminées avec succès !");
 
@@ -103,14 +117,18 @@ impl AppState {
 
         let indexes = [
             // library_tracks : la table la plus requêtée
-            // WHERE library_id = ? → utilisé dans TOUTES les pages
-            "CREATE INDEX IF NOT EXISTS idx_lt_library_id ON library_tracks(library_id)",
+            // Note : idx_library_tracks_library / _artist / _album sont déjà posés par les migrations SQL.
             // WHERE file_id = ? → utilisé pour le skip unchanged à l'import
             "CREATE INDEX IF NOT EXISTS idx_lt_file_id ON library_tracks(file_id)",
             // WHERE cache_id = ? → JOIN avec library_cache
             "CREATE INDEX IF NOT EXISTS idx_lt_cache_id ON library_tracks(cache_id)",
             // WHERE library_id + ORDER BY play_count → page stats top écoutés
             "CREATE INDEX IF NOT EXISTS idx_lt_play_count ON library_tracks(library_id, play_count DESC)",
+
+            // Suppression des anciens index redondants sur library_tracks
+            "DROP INDEX IF EXISTS idx_lt_library_id",
+            "DROP INDEX IF EXISTS idx_lt_artist_id",
+            "DROP INDEX IF EXISTS idx_lt_album_id",
 
             // library_albums : WHERE library_id = ?
             "CREATE INDEX IF NOT EXISTS idx_la_library_id ON library_albums(library_id)",
@@ -124,14 +142,10 @@ impl AppState {
             // un seul fichier. Il échoue sans bruit si des doublons existent.
             crate::repository::library::library_album_repository::INDEX_COMPAT_0_2_4,
 
-            // library_tracks : WHERE artist_id = ? → page artiste (tracks)
-            "CREATE INDEX IF NOT EXISTS idx_lt_artist_id ON library_tracks(artist_id)",
             // Compter les pistes d'un artiste dans une bibliothèque : sans cet
             // index le planificateur retombait sur `library_id` seul, des
             // milliers de lignes balayées par artiste.
             "CREATE INDEX IF NOT EXISTS idx_lt_library_artist ON library_tracks(library_id, artist_id)",
-            // library_tracks : WHERE library_album_id = ? → page album
-            "CREATE INDEX IF NOT EXISTS idx_lt_album_id ON library_tracks(library_album_id)",
 
             // library_artists : WHERE library_id = ?
             "CREATE INDEX IF NOT EXISTS idx_lart_library_id ON library_artists(library_id)",
@@ -149,6 +163,13 @@ impl AppState {
 
             // library_cache : WHERE genre → page genres
             "CREATE INDEX IF NOT EXISTS idx_lc_genre ON library_cache(genre)",
+
+            // playlist_items : WHERE library_track_id = ? → jointures & cascades
+            "CREATE INDEX IF NOT EXISTS idx_pi_library_track ON playlist_items(library_track_id)",
+
+            // queue_tracks & recent_files : lookups/suppressions par chemin
+            "CREATE INDEX IF NOT EXISTS idx_qt_path ON queue_tracks(path)",
+            "CREATE INDEX IF NOT EXISTS idx_rf_path ON recent_files(path)",
 
             // recent_files : ORDER BY last_played_at → récents
             "CREATE INDEX IF NOT EXISTS idx_rf_last_played ON recent_files(last_played_at DESC)",
@@ -171,6 +192,8 @@ impl AppState {
         if let Err(e) = crate::service::library::album_merge::consolidate(&pool).await {
             log::error!("⚠️ Rassemblement des albums : {e}");
         }
+
+        crate::core::tidal::client::set_persist_pool(pool.clone());
 
         Ok(Self {
             pool,

@@ -4,7 +4,7 @@
 //! (`access_token` atau `refresh_token`), serta pembaruan token otomatis ketika kedaluwarsa.
 
 use std::collections::HashMap;
-use std::sync::{Mutex, OnceLock};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
 
 use reqwest::header::{AUTHORIZATION, CONTENT_TYPE};
@@ -55,6 +55,26 @@ struct CachedToken {
 fn token_cache() -> &'static Mutex<HashMap<String, CachedToken>> {
     static CACHE: OnceLock<Mutex<HashMap<String, CachedToken>>> = OnceLock::new();
     CACHE.get_or_init(Default::default)
+}
+
+fn persist_pool() -> &'static OnceLock<sqlx::SqlitePool> {
+    static POOL: OnceLock<sqlx::SqlitePool> = OnceLock::new();
+    &POOL
+}
+
+/// Enregistre le pool SQLite pour persister les tokens TIDAL rafraîchis.
+pub fn set_persist_pool(pool: sqlx::SqlitePool) {
+    let _ = persist_pool().set(pool);
+}
+
+async fn refresh_mutex_for(key: &str) -> Arc<tokio::sync::Mutex<()>> {
+    static LOCKS: OnceLock<tokio::sync::Mutex<HashMap<String, Arc<tokio::sync::Mutex<()>>>>> =
+        OnceLock::new();
+    let map_lock = LOCKS.get_or_init(Default::default);
+    let mut map = map_lock.lock().await;
+    map.entry(key.to_string())
+        .or_insert_with(|| Arc::new(tokio::sync::Mutex::new(())))
+        .clone()
 }
 
 #[derive(Debug, Clone)]
@@ -147,13 +167,55 @@ impl Server {
         if self.user_id.is_empty() {
             return;
         }
+        let key = self.cache_key();
         token_cache().lock().unwrap_or_else(|e| e.into_inner()).insert(
-            self.cache_key(),
+            key.clone(),
             CachedToken {
                 access_token: access.to_string(),
                 refresh_token: refresh.to_string(),
             },
         );
+        if let Some(pool) = persist_pool().get().cloned() {
+            let acc = access.to_string();
+            let ref_tok = refresh.to_string();
+            let stored_uid = self.stored_user_id();
+            tokio::spawn(async move {
+                let res = sqlx::query(
+                    "UPDATE media_servers SET token = ?, salt = COALESCE(NULLIF(?, ''), salt) WHERE kind = 'tidal' AND user_id = ?",
+                )
+                .bind(&acc)
+                .bind(&ref_tok)
+                .bind(&stored_uid)
+                .execute(&pool)
+                .await;
+                if let Err(e) = res {
+                    log::warn!("TIDAL token persistence failed for {stored_uid}: {e}");
+                }
+            });
+        }
+    }
+
+    async fn refresh_once(&self, failed_token: &str) -> Option<String> {
+        let key = self.cache_key();
+        let lock = refresh_mutex_for(&key).await;
+        let _guard = lock.lock().await;
+
+        let latest = self.effective_access_token();
+        if !latest.is_empty() && latest != failed_token {
+            return Some(latest);
+        }
+
+        let ref_tok = self.effective_refresh_token();
+        if ref_tok.is_empty() {
+            return None;
+        }
+        match refresh_with_token(&self.client_id, &self.client_secret, &ref_tok).await {
+            Ok((new_acc, new_ref)) => {
+                self.remember_tokens(&new_acc, &new_ref);
+                Some(new_acc)
+            }
+            Err(_) => None,
+        }
     }
 
     /// Hubungkan ke akun TIDAL dari:
@@ -399,15 +461,9 @@ impl Server {
                 .map_err(|e| format!("TIDAL request failed: {e}"))?;
             let status = resp.status();
             if status == reqwest::StatusCode::UNAUTHORIZED && attempt == 0 {
-                let ref_tok = self.effective_refresh_token();
-                if !ref_tok.is_empty() {
-                    if let Ok((new_acc, new_ref)) =
-                        refresh_with_token(&self.client_id, &self.client_secret, &ref_tok).await
-                    {
-                        self.remember_tokens(&new_acc, &new_ref);
-                        token = new_acc;
-                        continue;
-                    }
+                if let Some(new_acc) = self.refresh_once(&token).await {
+                    token = new_acc;
+                    continue;
                 }
             }
             let text = resp.text().await.unwrap_or_default();
@@ -447,15 +503,9 @@ impl Server {
                 .map_err(|e| format!("TIDAL POST failed: {e}"))?;
             let status = resp.status();
             if status == reqwest::StatusCode::UNAUTHORIZED && attempt == 0 {
-                let ref_tok = self.effective_refresh_token();
-                if !ref_tok.is_empty() {
-                    if let Ok((new_acc, new_ref)) =
-                        refresh_with_token(&self.client_id, &self.client_secret, &ref_tok).await
-                    {
-                        self.remember_tokens(&new_acc, &new_ref);
-                        token = new_acc;
-                        continue;
-                    }
+                if let Some(new_acc) = self.refresh_once(&token).await {
+                    token = new_acc;
+                    continue;
                 }
             }
             let next_etag = resp
@@ -499,15 +549,9 @@ impl Server {
                 .map_err(|e| format!("TIDAL DELETE failed: {e}"))?;
             let status = resp.status();
             if status == reqwest::StatusCode::UNAUTHORIZED && attempt == 0 {
-                let ref_tok = self.effective_refresh_token();
-                if !ref_tok.is_empty() {
-                    if let Ok((new_acc, new_ref)) =
-                        refresh_with_token(&self.client_id, &self.client_secret, &ref_tok).await
-                    {
-                        self.remember_tokens(&new_acc, &new_ref);
-                        token = new_acc;
-                        continue;
-                    }
+                if let Some(new_acc) = self.refresh_once(&token).await {
+                    token = new_acc;
+                    continue;
                 }
             }
             if !status.is_success() {

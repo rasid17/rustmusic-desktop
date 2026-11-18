@@ -35,6 +35,10 @@ pub fn blurred_cover(source: &str, saturation: f32, flou: f32) -> Result<PathBuf
         .join("com.larevuegeek.rustmusic")
         .join("covers")
         .join("flou");
+    blurred_cover_in(&dossier, source, saturation, flou)
+}
+
+fn blurred_cover_in(dossier: &std::path::Path, source: &str, saturation: f32, flou: f32) -> Result<PathBuf, String> {
     let cle = format!("{:x}", md5::compute(format!("{source}|{saturation:.2}|{flou:.2}")));
     let sortie = dossier.join(format!("{cle}.jpg"));
     if sortie.exists() {
@@ -51,7 +55,7 @@ pub fn blurred_cover(source: &str, saturation: f32, flou: f32) -> Result<PathBuf
     saturate(&mut petite, saturation);
     let floue = image::imageops::blur(&petite, flou);
 
-    std::fs::create_dir_all(&dossier).map_err(|e| format!("création de {}: {e}", dossier.display()))?;
+    std::fs::create_dir_all(dossier).map_err(|e| format!("création de {}: {e}", dossier.display()))?;
     // Écrite à côté puis renommée : un affichage concurrent ne lit jamais une image à moitié écrite.
     let temporaire = dossier.join(format!("{cle}.{}.tmp", std::process::id()));
     floue
@@ -309,7 +313,7 @@ pub async fn migrate_old_thumbnails(
 
     // ── PASS 1 : Déplacement fichiers + mise à jour DB ──
     log::info!("{} Pass 1 : déplacement + DB pour {} fichiers", label, total);
-    let mut tx = db.begin().await.map_err(|e| format!("Erreur transaction: {}", e))?;
+    let mut tx = db.begin_with("BEGIN IMMEDIATE").await.map_err(|e| format!("Erreur transaction: {}", e))?;
     let mut migrated_files: Vec<(PathBuf, String)> = Vec::new();
 
     let progress = AtomicUsize::new(0);
@@ -403,7 +407,8 @@ mod tests_flou {
         .save(&source)
         .unwrap();
 
-        let floue = blurred_cover(source.to_str().unwrap(), 1.0, 4.0).expect("pochette floue");
+        let flou_cache = dossier.join("flou");
+        let floue = blurred_cover_in(&flou_cache, source.to_str().unwrap(), 1.0, 4.0).expect("pochette floue");
         let lue = image::open(&floue).unwrap().to_rgb8();
         assert_eq!(lue.dimensions(), (BLURRED_SIZE, BLURRED_SIZE));
         let (min, max) = lue.pixels().fold((255u8, 0u8), |(lo, hi), p| (lo.min(p.0[0]), hi.max(p.0[0])));
@@ -411,7 +416,7 @@ mod tests_flou {
         assert!(min > 20 && max < 235, "flou insuffisant : {min}..{max}");
 
         let date = std::fs::metadata(&floue).unwrap().modified().unwrap();
-        assert_eq!(blurred_cover(source.to_str().unwrap(), 1.0, 4.0).unwrap(), floue, "même clé, même fichier");
+        assert_eq!(blurred_cover_in(&flou_cache, source.to_str().unwrap(), 1.0, 4.0).unwrap(), floue, "même clé, même fichier");
         assert_eq!(std::fs::metadata(&floue).unwrap().modified().unwrap(), date, "pas régénérée");
 
         let _ = std::fs::remove_file(&floue);

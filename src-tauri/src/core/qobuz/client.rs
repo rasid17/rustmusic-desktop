@@ -337,9 +337,7 @@ impl Server {
         for candidate_pw in &pw_candidates {
             for field in [user_field, if user_field == "email" { "username" } else { "email" }] {
                 let params = [(field, user), ("password", candidate_pw.as_str()), ("app_id", app_id.as_str())];
-                let Ok(url) = reqwest::Url::parse_with_params(&format!("{API_BASE}/user/login"), &params) else {
-                    continue;
-                };
+                let url = format!("{API_BASE}/user/login");
                 let body = form_body(&params);
                 let resp = client()
                     .post(url)

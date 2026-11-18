@@ -120,25 +120,26 @@ fn browse_library_root(library_id: i64, server_base_url: &str, langue: &str) -> 
 /// Helper : emit Artists / Albums / Folders sub-containers for a given library
 /// under `parent_id`. Used for both library roots and the auto-collapsed root.
 fn emit_library_children(didl: &mut DidlBuilder, library_id: i64, parent_id: &str, langue: &str) {
+    // Gunakan childCount non-zero agar folder picker & client UPnP memperbolehkan drill-down.
     didl.add_container(
         &format!("0/lib/{}/artists", library_id),
         parent_id,
         menu_title(Menu::Artistes, langue),
-        0,
+        1,
         "object.container",
     );
     didl.add_container(
         &format!("0/lib/{}/albums", library_id),
         parent_id,
         menu_title(Menu::Albums, langue),
-        0,
+        1,
         "object.container",
     );
     didl.add_container(
         &format!("0/lib/{}/folders", library_id),
         parent_id,
         menu_title(Menu::Dossiers, langue),
-        0,
+        1,
         "object.container.storageFolder",
     );
 }
@@ -317,7 +318,7 @@ fn paginate<T>(items: &[T], start: u32, count: u32) -> &[T] {
     if start >= items.len() {
         return &[];
     }
-    let end = (start + effective_limit(count)).min(items.len());
+    let end = start.saturating_add(effective_limit(count)).min(items.len());
     &items[start..end]
 }
 
@@ -502,5 +503,29 @@ mod tests {
         assert_eq!(menu_title(Menu::Albums, "de"), "Alben");
         // Langue inconnue : anglais.
         assert_eq!(menu_title(Menu::Dossiers, "pt"), "Folders");
+    }
+
+    #[tokio::test]
+    async fn library_menus_expose_browsable_child_count() {
+        let provider: Arc<dyn LibraryProvider> = Arc::new(Fake);
+        let req = BrowseRequest {
+            object_id: "0/lib/1".into(),
+            browse_flag: BrowseFlag::BrowseDirectChildren,
+            starting_index: 0,
+            requested_count: 10,
+        };
+        let res = handle_browse(provider, "http://h:8200", &req).await.unwrap();
+        assert_eq!(res.number_returned, 3);
+        assert!(res.didl_xml.contains(r#"id="0/lib/1/artists""#) && res.didl_xml.contains(r#"childCount="1""#));
+        assert!(res.didl_xml.contains(r#"id="0/lib/1/albums""#));
+        assert!(res.didl_xml.contains(r#"id="0/lib/1/folders""#));
+    }
+
+    #[test]
+    fn paginate_does_not_overflow_when_start_nonzero_and_count_zero() {
+        let items = vec![10, 20, 30, 40];
+        assert_eq!(paginate(&items, 1, 0), &[20, 30, 40]);
+        assert_eq!(paginate(&items, 4, 0), &[] as &[i32]);
+        assert_eq!(paginate(&items, u32::MAX, 0), &[] as &[i32]);
     }
 }

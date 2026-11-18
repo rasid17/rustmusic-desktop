@@ -2,11 +2,12 @@
   import Icon from "@iconify/svelte";
   import { popinStore } from "#lib/stores/ui/popin.store";
   import PopinFooter from "#lib/components/ui/popin/PopinFooter.svelte";
+  import { t } from "#lib/i18n";
 
   let {
     message = "",
-    confirmText = "Confirmer",
-    cancelText = "Annuler",
+    confirmText = undefined,
+    cancelText = undefined,
     onConfirm = () => {},
     onCancel = () => {},
     variant = "primary"
@@ -18,6 +19,9 @@
     onCancel?: (() => void) | (() => Promise<void>);
     variant?: "danger" | "primary";
   } = $props();
+
+  const resolvedConfirmText = $derived(confirmText ?? $t("common.confirm"));
+  const resolvedCancelText = $derived(cancelText ?? $t("common.cancel"));
 
   let isLoading = $state(false);
   const danger = $derived(variant === "danger");
@@ -64,10 +68,10 @@
 
 <PopinFooter
   bleed
-  cancelLabel={cancelText}
+  cancelLabel={resolvedCancelText}
   oncancel={handleCancel}
   cancelDisabled={isLoading}
-  submitLabel={confirmText}
+  submitLabel={resolvedConfirmText}
   submitIcon={danger ? "material-symbols:delete-outline-rounded" : "material-symbols:check-rounded"}
   onsubmit={handleConfirm}
   busy={isLoading}

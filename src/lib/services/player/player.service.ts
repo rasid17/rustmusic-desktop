@@ -819,8 +819,12 @@ class PlayerService {
             // ne l'émet pas, un événement manqué au démarrage. On ne laisse pas
             // la barre figée pour autant.
             if (current > 0 && raf === 0) {
-                player.update({ isPreparing: false });
-                this.startAnimation();
+                if (get(player).isPreparing) {
+                    player.update({ isPreparing: false });
+                }
+                if (!this.animationSuspended) {
+                    this.startAnimation();
+                }
             }
 
         } catch (err) {
@@ -869,7 +873,10 @@ class PlayerService {
         const loop = () => {
 
             const p = get(player);
-            if (p.status !== "playing") return;
+            if (p.status !== "playing" || this.animationSuspended) {
+                raf = 0;
+                return;
+            }
 
             // Pendant le pré-décodage (Minimal mode), CPAL n'a pas encore
             // démarré : on FIGE la progress bar à 0 pour ne pas afficher

@@ -561,27 +561,40 @@ impl Server {
             let _ = self.post_form("/playlist/update", &params).await?;
         }
         if let Some(ids) = song_ids {
-            // Supprime d'abord les anciens `playlist_track_id`, puis ajoute la nouvelle liste dans l'ordre.
-            if let Ok(detail) = self.get("/playlist/get", &[("playlist_id", id), ("extra", "tracks"), ("limit", "500")]).await {
-                let existing_pt_ids: Vec<String> = detail
-                    .pointer("/tracks/items")
-                    .and_then(Value::as_array)
-                    .into_iter()
-                    .flatten()
-                    .filter_map(|t| id_str(t.get("playlist_track_id")))
-                    .collect();
-                if !existing_pt_ids.is_empty() {
-                    let joined = existing_pt_ids.join(",");
-                    let _ = self
-                        .post_form("/playlist/deleteTracks", &[("playlist_id", id), ("playlist_track_ids", &joined)])
-                        .await;
-                }
+            // Lire l'état existant, ajouter d'abord les nouveaux morceaux pour ne jamais
+            // laisser la playlist vide en cas d'échec réseau, puis retirer les anciens IDs.
+            let detail = self
+                .get("/playlist/get", &[("playlist_id", id), ("extra", "tracks"), ("limit", "500")])
+                .await?;
+            let existing_tracks = detail
+                .pointer("/tracks/items")
+                .and_then(Value::as_array)
+                .cloned()
+                .unwrap_or_default();
+            let existing_song_ids: Vec<String> = existing_tracks
+                .iter()
+                .filter_map(|t| id_str(t.get("id")))
+                .collect();
+            if existing_song_ids == ids {
+                return Ok(());
             }
+            let existing_pt_ids: Vec<String> = existing_tracks
+                .iter()
+                .filter_map(|t| id_str(t.get("playlist_track_id")))
+                .collect();
             if !ids.is_empty() {
                 let joined = ids.join(",");
                 self.post_form(
                     "/playlist/addTracks",
                     &[("playlist_id", id), ("track_ids", &joined), ("no_duplicate", "false")],
+                )
+                .await?;
+            }
+            if !existing_pt_ids.is_empty() {
+                let joined = existing_pt_ids.join(",");
+                self.post_form(
+                    "/playlist/deleteTracks",
+                    &[("playlist_id", id), ("playlist_track_ids", &joined)],
                 )
                 .await?;
             }

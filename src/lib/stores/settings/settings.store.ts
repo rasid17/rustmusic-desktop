@@ -101,7 +101,7 @@ export type AppSettings = {
 export const settingsDefaults: AppSettings = {
   language: 'en',
   auto_start: 'false',
-  minimize_to_tray: 'true',
+  minimize_to_tray: 'false',
   show_notifications: 'false',
   scan_on_startup: 'false',
   audio_quality: 'high',
@@ -180,6 +180,9 @@ const sideEffects: Partial<Record<keyof AppSettings, (value: string) => Promise<
       }
     } catch (e) {
       console.error('[settings] Erreur autostart:', e);
+      const fallback = value === 'true' ? 'false' : 'true';
+      settingsWriter.update((s) => ({ ...s, auto_start: fallback }));
+      void invoke('set_setting', { key: 'auto_start', value: fallback }).catch(() => {});
     }
   },
 
@@ -365,12 +368,15 @@ export const settingsStore = {
   // 2. Persiste en BDD via la commande Tauri
   // 3. Exécute l'effet de bord si défini (ex: activer/désactiver autostart)
   set: async (key: keyof AppSettings, value: string) => {
+    const prev = get(settingsWriter)[key];
     settingsWriter.update(state => ({ ...state, [key]: value }));
 
     try {
       await invoke('set_setting', { key, value });
     } catch (e) {
       console.error(`[settingsStore] Failed to save ${key}`, e);
+      settingsWriter.update(state => ({ ...state, [key]: prev }));
+      return;
     }
 
     // Exécuter l'effet de bord (autostart, notifications, etc.)

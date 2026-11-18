@@ -105,23 +105,25 @@ async fn smart_covers(pool: &SqlitePool, playlist_id: i64, json: &str) -> Result
         return Ok(Vec::new());
     }
 
-    let trous = std::iter::repeat_n("?", ids.len()).collect::<Vec<_>>().join(",");
-    let sql = format!(
-        "SELECT lt.id, {POCHETTE} FROM library_tracks lt
-         LEFT JOIN library_albums la ON la.id = lt.library_album_id
-         LEFT JOIN library_cache lc ON lc.id = lt.cache_id
-         WHERE lt.id IN ({trous}) AND {POCHETTE} IS NOT NULL"
-    );
-    let mut q = sqlx::query_as::<_, (String, String)>(sqlx::AssertSqlSafe(sql));
-    for id in &ids {
-        q = q.bind(id);
+    let mut trouvees: std::collections::HashMap<String, String> = std::collections::HashMap::new();
+    for chunk in ids.chunks(400) {
+        let trous = std::iter::repeat_n("?", chunk.len()).collect::<Vec<_>>().join(",");
+        let sql = format!(
+            "SELECT lt.id, {POCHETTE} FROM library_tracks lt
+             LEFT JOIN library_albums la ON la.id = lt.library_album_id
+             LEFT JOIN library_cache lc ON lc.id = lt.cache_id
+             WHERE lt.id IN ({trous}) AND {POCHETTE} IS NOT NULL"
+        );
+        let mut q = sqlx::query_as::<_, (String, String)>(sqlx::AssertSqlSafe(sql));
+        for id in chunk {
+            q = q.bind(id);
+        }
+        let rows: Vec<(String, String)> = q
+            .fetch_all(pool)
+            .await
+            .map_err(|e| format!("Pochettes : {e}"))?;
+        trouvees.extend(rows);
     }
-    let trouvees: std::collections::HashMap<String, String> = q
-        .fetch_all(pool)
-        .await
-        .map_err(|e| format!("Pochettes : {e}"))?
-        .into_iter()
-        .collect();
 
     // Dans l'ordre de la playlist, pas dans celui de la base.
     Ok(distinct(ids.iter().filter_map(|id| trouvees.get(id).cloned()).collect()))

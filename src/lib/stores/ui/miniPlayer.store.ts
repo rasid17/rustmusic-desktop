@@ -128,7 +128,9 @@ export async function ensureNormalSize(): Promise<void> {
     const minW = surLinux ? TILING_MIN_W : NORMAL_MIN_W;
     const minH = surLinux ? TILING_MIN_H : NORMAL_MIN_H;
     await win.setMinSize(new LogicalSize(minW, minH));
+    if (await win.isMinimized()) return;
     const taille = (await win.innerSize()).toLogical(await win.scaleFactor());
+    if (taille.width <= 0 || taille.height <= 0) return;
     if (taille.width < minW || taille.height < minH) {
       await win.setSize(new LogicalSize(NORMAL_W, NORMAL_H));
       if (!surLinux) {

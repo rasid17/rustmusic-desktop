@@ -269,7 +269,7 @@ async fn generer_auto_mix(
     let (choix, pool) = auto_mix::choisir(candidats, &opts, &exclus, graine);
     let ids: Vec<String> = choix.iter().map(|c| c.library_track_id.clone()).collect();
 
-    let mut tx = pool_api.begin().await.map_err(|e| format!("transaction : {e}"))?;
+    let mut tx = pool_api.begin_with("BEGIN IMMEDIATE").await.map_err(|e| format!("transaction : {e}"))?;
     sqlx::query("DELETE FROM playlist_items WHERE playlist_id = ?")
         .bind(playlist_id)
         .execute(&mut *tx)

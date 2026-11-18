@@ -10,9 +10,9 @@
   import MicroPlayer from "./MicroPlayer.svelte";
   import { microPlayerActive, syncMiniStyleFromStorage } from "#lib/stores/ui/miniWindow.store";
   import { settingsStore } from "#lib/stores/settings/settings.store";
-  import { initPlaybackPipelineListener } from "#lib/stores/player/playbackPipeline.store";
+  import { initPlaybackPipelineListener, disposePlaybackPipelineListener } from "#lib/stores/player/playbackPipeline.store";
   import { initMiniClient, notifyMainReady, sendCmd } from "#lib/services/mini/miniBridge";
-  import { initVolumeSync, loadVolume, volume, applyVolume } from "#lib/stores/player/volume.store";
+  import { initVolumeSync, disposeVolumeSync, loadVolume, volume, applyVolume } from "#lib/stores/player/volume.store";
   import { player } from "#lib/stores/player/player.store";
   import { applyAccent } from "#lib/helper/theme/accent";
   import { resolveShortcuts, eventToBinding, findAction, type ShortcutAction } from "#lib/config/shortcuts";
@@ -49,13 +49,16 @@
     shortcutHandlers[action]();
   }
 
-  onMount(async () => {
+  onMount(() => {
     // L'écran de chargement d'app.html n'a pas lieu d'être : le lecteur est déjà là.
     document.getElementById("demarrage")?.remove();
     document.documentElement.classList.add("mini-window-transparent");
 
+    let disposed = false;
+    let client: ReturnType<typeof initMiniClient> | null = null;
     const win = getCurrentWindow();
     const afficher = async () => {
+      if (disposed) return;
       syncMiniStyleFromStorage();
       await win.show();
       await win.setFocus();
@@ -63,21 +66,34 @@
       notifyMainReady();
     };
 
-    await settingsStore.init();
-    initVolumeSync();
-    void loadVolume();
-    initPlaybackPipelineListener();
-    const client = initMiniClient(() => void afficher());
+    void (async () => {
+      await settingsStore.init();
+      if (disposed) return;
+      initVolumeSync();
+      void loadVolume();
+      void initPlaybackPipelineListener();
+      client = initMiniClient(() => void afficher());
 
-    // Attendre le premier état évite d'afficher une fenêtre vide ; le pont a
-    // son propre filet (800 ms) si la fenêtre principale ne répond pas.
-    await client.firstState;
-    await afficher();
+      // Attendre le premier état évite d'afficher une fenêtre vide ; le pont a
+      // son propre filet (800 ms) si la fenêtre principale ne répond pas.
+      await client.firstState;
+      if (disposed) return;
+      await afficher();
+      if (disposed) return;
 
-    // GTK3 n'honore les tailles demandées au widget que si la fenêtre a été
-    // rendue non redimensionnable en cours de session (comme la principale en
-    // entrant en mode mini) : figée une fois affichée, sans bords saisissables.
-    await win.setResizable(false);
+      // GTK3 n'honore les tailles demandées au widget que si la fenêtre a été
+      // rendue non redimensionnable en cours de session (comme la principale en
+      // entrant en mode mini) : figée une fois affichée, sans bords saisissables.
+      await win.setResizable(false);
+    })();
+
+    return () => {
+      disposed = true;
+      client?.dispose();
+      client = null;
+      disposeVolumeSync();
+      void disposePlaybackPipelineListener();
+    };
   });
 </script>
 

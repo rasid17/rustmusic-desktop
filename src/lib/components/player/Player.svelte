@@ -36,6 +36,7 @@ import StatusDot from "#lib/components/ui/status/StatusDot.svelte";
 import { serverStore } from "#lib/stores/mediaServer/mediaServer.store";
 import { libraryStore } from "#lib/stores/library/library.store";
 import { remoteServerId } from "#lib/types/db/library/Library";
+import { subscribeCoverFallback } from "#lib/helper/tools/coverHelper";
 
 const audioFile = $derived($player?.audioFile);
 const audioTags = $derived(audioFile?.tags);
@@ -48,7 +49,19 @@ const enAttente = $derived(isPlaying && !!$player?.isPreparing);
 const duration = $derived($player?.duration ?? 0);
 const jsPosition = $derived($player?.jsPosition ?? 0);
 const jsPositionPercent = $derived(duration ? Math.min(100, Math.max(0, (jsPosition / duration) * 100)) : 0);
-const coverSrc = $derived(audioTags?.attached_images?.[0]?.image_src ?? "/images/no-cd.png");
+const attachedCover = $derived(audioTags?.attached_images?.[0]?.image_src ?? null);
+const currentQueueCover = $derived($queueState.tracks[$queueState.currentIndex]?.cover ?? null);
+let fallbackCover = $state<string | null>(null);
+$effect(() => {
+  if (!hasTrack || attachedCover) {
+    fallbackCover = null;
+    return;
+  }
+  return subscribeCoverFallback(currentQueueCover, "full", (url) => {
+    fallbackCover = url;
+  });
+});
+const coverSrc = $derived(attachedCover ?? fallbackCover ?? "/images/no-cd.png");
 
 const annee = $derived(audioTags?.year ? dateToYear(audioTags.year) : "");
 

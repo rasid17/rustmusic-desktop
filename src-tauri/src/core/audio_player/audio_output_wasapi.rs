@@ -22,9 +22,8 @@
 
 use crate::core::audio_player::output::samples;
 use crate::core::audio_player::output::dop_engine::{DopRenderCtl, PRECHAUFFAGE_S};
-use std::cell::Cell;
 use std::sync::atomic::{AtomicBool, AtomicU8, AtomicUsize, Ordering};
-use std::sync::{Arc, RwLock};
+use std::sync::{Arc, Condvar, Mutex, RwLock};
 use std::time::Duration;
 
 use ringbuf::traits::Consumer;
@@ -33,71 +32,53 @@ use wasapi::{
     initialize_mta,
 };
 
-// ============================================================================
-// Initialisation COM — par-thread (PAS process-wide)
-// ============================================================================
-//
-// WASAPI utilise COM. Sous Windows, COM est initialisé **par thread** dans
-// soit l'apartment MTA (Multi-Threaded), soit STA (Single-Threaded). Un
-// thread ne peut PAS changer d'apartment après son init.
-//
-// Tauri initialise ses worker threads en STA. Si on appelle `initialize_mta`
-// depuis une commande Tauri, on obtient `RPC_E_CHANGED_MODE (0x80010106)`.
-//
-// Solution :
-// 1. **Stockage thread_local** : on garde un flag par thread pour savoir si
-//    on a déjà tenté l'init, et son résultat.
-// 2. **Helper `run_on_mta_thread`** : pour les opérations one-shot (énumération
-//    devices, format negotiation), on spawn un thread frais qui peut init MTA
-//    proprement, puis on join. Coût ~2 ms, négligeable pour ces ops.
-// 3. **Render thread** : `run_wasapi_playback` est censé être appelé depuis
-//    un thread dédié à la lecture — il init MTA sur lui-même au démarrage.
-
-thread_local! {
-    static COM_INIT_STATE: Cell<ComInitState> = const { Cell::new(ComInitState::Untried) };
+struct ComMtaGuard {
+    initialized: bool,
 }
 
-#[derive(Debug, Clone, Copy)]
-enum ComInitState {
-    Untried,
-    OkMta,
-    Failed,
-}
-
-/// Init COM en MTA sur le thread courant. Idempotent : ne retente pas si
-/// déjà tenté. À utiliser **uniquement sur un thread où on contrôle l'init**
-/// (thread spawné, thread audio dédié) — JAMAIS sur un thread Tauri (déjà STA).
-fn ensure_com_initialized_current_thread() -> Result<(), String> {
-    COM_INIT_STATE.with(|cell| match cell.get() {
-        ComInitState::OkMta => Ok(()),
-        ComInitState::Failed => Err("COM init already failed on this thread".into()),
-        ComInitState::Untried => {
-            let hr = initialize_mta();
-            if hr.is_ok() {
-                cell.set(ComInitState::OkMta);
-                Ok(())
-            } else {
-                cell.set(ComInitState::Failed);
-                Err(format!(
-                    "CoInitializeEx (MTA) failed: HRESULT 0x{:08X} (probably called from a thread already in STA)",
-                    hr.0
-                ))
-            }
+impl ComMtaGuard {
+    fn acquire() -> Result<Self, String> {
+        let hr = initialize_mta();
+        if hr.is_ok() {
+            Ok(Self { initialized: true })
+        } else {
+            Err(format!(
+                "CoInitializeEx (MTA) failed: HRESULT 0x{:08X} (probably called from a thread already in STA)",
+                hr.0
+            ))
         }
-    })
+    }
 }
 
-/// Exécute `f` sur un thread frais, init MTA d'abord. Renvoie le résultat.
-/// Utilisé par les commandes Tauri (`wasapi_*_command`) qui sont appelées
-/// depuis un thread Tauri en STA — on ne peut pas faire MTA sur ce thread,
-/// donc on délègue à un thread propre.
+impl Drop for ComMtaGuard {
+    fn drop(&mut self) {
+        if self.initialized {
+            #[link(name = "ole32")]
+            extern "system" {
+                fn CoUninitialize();
+            }
+            // SAFETY: paired 1:1 with successful `initialize_mta()` on this thread.
+            unsafe { CoUninitialize() };
+        }
+    }
+}
+
+fn is_device_lost_error(err: &impl std::fmt::Debug) -> bool {
+    let msg = format!("{err:?}");
+    msg.contains("88890004") // AUDCLNT_E_DEVICE_INVALIDATED
+        || msg.contains("88890010") // AUDCLNT_E_SERVICE_NOT_RUNNING
+        || msg.contains("DEVICE_INVALIDATED")
+        || msg.contains("SERVICE_NOT_RUNNING")
+}
+
+/// Exécute `f` sur un thread frais, init COM MTA puis `CoUninitialize` au retour.
 fn run_on_mta_thread<T, F>(f: F) -> Result<T, String>
 where
     T: Send + 'static,
     F: FnOnce() -> Result<T, String> + Send + 'static,
 {
     std::thread::spawn(move || {
-        ensure_com_initialized_current_thread()?;
+        let _com = ComMtaGuard::acquire()?;
         f()
     })
     .join()
@@ -469,36 +450,48 @@ pub fn try_negotiate_exclusive_format(
             }
         }
 
-        // Pour chaque rate : 24-bit puis 16-bit (Int PCM uniquement).
-        for rate in &candidates_rates {
-            for bits in &[24u16, 16] {
-                let (storage_bits, valid_bits) = if *bits == 24 { (32, 24) } else { (16, 16) };
-                let fmt = WaveFormat::new(
-                    storage_bits as usize,
-                    valid_bits as usize,
-                    &SampleType::Int,
-                    *rate as usize,
-                    channels as usize,
-                    None,
-                );
-                if audio_client.is_supported(&fmt, &ShareMode::Exclusive).is_ok() {
-                    log::info!(
-                        "🎚️  WASAPI exclusive: format négocié {} Hz / {}-bit / {} canaux",
-                        rate, bits, channels
+        // Canaux : natif d'abord, puis stereo si source mono (de nombreux DAC USB refusent 1 ch en exclusif).
+        let channel_candidates: Vec<u16> = if channels == 1 { vec![1, 2] } else { vec![channels] };
+        let format_candidates: &[(u16, WasapiSampleType)] = &[
+            (24, WasapiSampleType::Int),
+            (32, WasapiSampleType::Int),
+            (16, WasapiSampleType::Int),
+            (32, WasapiSampleType::Float),
+        ];
+
+        for &ch in &channel_candidates {
+            for rate in &candidates_rates {
+                for &(bits, st) in format_candidates {
+                    let (storage_bits, valid_bits) = if bits == 24 { (32, 24) } else { (bits, bits) };
+                    let w_type = match st {
+                        WasapiSampleType::Int => &SampleType::Int,
+                        WasapiSampleType::Float => &SampleType::Float,
+                    };
+                    let fmt = WaveFormat::new(
+                        storage_bits as usize,
+                        valid_bits as usize,
+                        w_type,
+                        *rate as usize,
+                        ch as usize,
+                        None,
                     );
-                    // On encode le format dans un Result<NegotiatedFormat, String>
-                    // car le helper run_on_mta_thread renvoie String en erreur.
-                    return Ok(NegotiatedFormat {
-                        sample_rate: *rate,
-                        channels,
-                        bits_per_sample: *bits,
-                        sample_type: WasapiSampleType::Int,
-                    });
+                    if audio_client.is_supported(&fmt, &ShareMode::Exclusive).is_ok() {
+                        log::info!(
+                            "🎚️  WASAPI exclusive: format négocié {} Hz / {}-bit {:?} / {} canaux",
+                            rate, bits, st, ch
+                        );
+                        return Ok(NegotiatedFormat {
+                            sample_rate: *rate,
+                            channels: ch,
+                            bits_per_sample: bits,
+                            sample_type: st,
+                        });
+                    }
                 }
             }
         }
         Err(format!(
-            "{AUCUN_FORMAT} pour {channels} canaux (essayés : {} Hz × 24/16-bit)",
+            "{AUCUN_FORMAT} pour {channels} canaux (essayés : {} Hz × 24/32/16-bit)",
             candidates_rates
                 .iter()
                 .map(u32::to_string)
@@ -564,17 +557,41 @@ pub struct FluxPiste {
 /// Sans piste depuis ce délai, le moteur rend le DAC (aux autres applications).
 const INACTIVITE: Duration = Duration::from_secs(5);
 
+pub type EngineInitSignal = Arc<(Mutex<Option<Result<(), String>>>, Condvar)>;
+
+fn notify_engine_init(signal: &EngineInitSignal, res: Result<(), String>) {
+    let (lock, cv) = &**signal;
+    let mut guard = lock.lock().unwrap_or_else(|e| e.into_inner());
+    if guard.is_none() {
+        *guard = Some(res);
+        cv.notify_all();
+    }
+}
+
 /// Moteur WASAPI exclusif persistant : le DAC reste ouvert d'une piste à l'autre tant que
 /// le format ne change pas — l'ouverture coûte 1,5 à 2,5 s sur un DAC USB. Les pistes
 /// arrivent par `prochaine` ; entre deux, du silence.
 pub fn run_exclusive_engine(
     format: NegotiatedFormat,
     preferred_device_name: Option<String>,
-    prochaine: Arc<std::sync::Mutex<Option<FluxPiste>>>,
+    prochaine: Arc<Mutex<Option<FluxPiste>>>,
     arret: Arc<AtomicBool>,
+    dead: Arc<AtomicBool>,
+    init_signal: EngineInitSignal,
 ) -> Result<(), WasapiPlayerError> {
     let mut piste: Option<FluxPiste> = None;
-    let issue = engine_inner(format, preferred_device_name, &prochaine, &arret, &mut piste);
+    let issue = engine_inner(
+        format,
+        preferred_device_name,
+        &prochaine,
+        &arret,
+        &mut piste,
+        &init_signal,
+    );
+    dead.store(true, Ordering::Release);
+    if let Err(ref e) = issue {
+        notify_engine_init(&init_signal, Err(e.to_string()));
+    }
     // Personne n'attend un signal qui ne viendra plus.
     if let Some(p) = piste.take() {
         p.stream_ready.store(true, Ordering::Release);
@@ -588,19 +605,25 @@ pub fn run_exclusive_engine(
 fn engine_inner(
     format: NegotiatedFormat,
     preferred_device_name: Option<String>,
-    prochaine: &std::sync::Mutex<Option<FluxPiste>>,
+    prochaine: &Mutex<Option<FluxPiste>>,
     arret: &AtomicBool,
     piste: &mut Option<FluxPiste>,
+    init_signal: &EngineInitSignal,
 ) -> Result<(), WasapiPlayerError> {
     let mut phases = crate::core::audio_player::startup_timer::StartupTimer::new();
 
-    ensure_com_initialized_current_thread().map_err(WasapiPlayerError::ComInit)?;
+    let _com = ComMtaGuard::acquire().map_err(WasapiPlayerError::ComInit)?;
     phases.mark("init COM");
 
     let enumerator = DeviceEnumerator::new()
         .map_err(|e| WasapiPlayerError::NoDevice(format!("DeviceEnumerator: {e:?}")))?;
     let device = resolve_wasapi_device(&enumerator, preferred_device_name.as_deref())
         .map_err(WasapiPlayerError::NoDevice)?;
+    let dev_label = device
+        .get_friendlyname()
+        .ok()
+        .or(preferred_device_name)
+        .unwrap_or_else(|| "WASAPI exclusive".to_string());
     let mut audio_client = device
         .get_iaudioclient()
         .map_err(|e| WasapiPlayerError::NoDevice(format!("get_iaudioclient: {e:?}")))?;
@@ -611,10 +634,14 @@ fn engine_inner(
     } else {
         (format.bits_per_sample, format.bits_per_sample)
     };
+    let w_type = match format.sample_type {
+        WasapiSampleType::Int => &SampleType::Int,
+        WasapiSampleType::Float => &SampleType::Float,
+    };
     let wave_fmt = WaveFormat::new(
         storage_bits as usize,
         valid_bits as usize,
-        &SampleType::Int,
+        w_type,
         format.sample_rate as usize,
         format.channels as usize,
         None,
@@ -641,15 +668,28 @@ fn engine_inner(
     let render_client = audio_client
         .get_audiorenderclient()
         .map_err(|e| WasapiPlayerError::InitFailed(format!("get_audiorenderclient: {e:?}")))?;
+
+    // Pré-remplir le buffer de silence avant `start_stream()` : évite un clic initial
+    // sur le contenu non initialisé du tampon matériel en WASAPI event-driven.
+    if let Ok(avail) = audio_client.get_available_space_in_frames() {
+        let bf = avail as usize;
+        if bf > 0 {
+            let silence = vec![0u8; bf * bytes_per_frame];
+            let _ = render_client.write_to_device(bf, &silence, None);
+        }
+    }
+
     audio_client
         .start_stream()
         .map_err(|e| WasapiPlayerError::InitFailed(format!("start_stream: {e:?}")))?;
     phases.mark("démarrage du flux");
+    notify_engine_init(init_signal, Ok(()));
 
     log::info!(
-        "▶️  WASAPI exclusive: moteur démarré ({} Hz, {}-bit, {} ch, period {} ms)",
+        "▶️  WASAPI exclusive: moteur démarré ({} Hz, {}-bit {:?}, {} ch, period {} ms)",
         format.sample_rate,
         format.bits_per_sample,
+        format.sample_type,
         format.channels,
         period_hns / 10_000
     );
@@ -660,6 +700,7 @@ fn engine_inner(
     let mut premier_tampon = false;
     let mut chrono_rendu = true;
     let mut libre_depuis = std::time::Instant::now();
+    let mut consec_errors: u32 = 0;
 
     loop {
         if arret.load(Ordering::Relaxed) {
@@ -688,9 +729,20 @@ fn engine_inner(
             continue;
         }
         let available = match audio_client.get_available_space_in_frames() {
-            Ok(n) => n as usize,
+            Ok(n) => {
+                consec_errors = 0;
+                n as usize
+            }
             Err(e) => {
+                consec_errors += 1;
                 log::warn!("get_available_space_in_frames failed: {e:?}");
+                if is_device_lost_error(&e) || consec_errors >= 5 {
+                    if let Some(p) = piste.as_ref() {
+                        p.is_stopped.store(true, Ordering::SeqCst);
+                    }
+                    crate::core::audio_player::output::shared_engine::notify_lost(&dev_label, None);
+                    return Err(WasapiPlayerError::Runtime(format!("device lost: {e:?}")));
+                }
                 continue;
             }
         };
@@ -703,11 +755,23 @@ fn engine_inner(
             output_bytes.clear();
             output_bytes.resize(available * bytes_per_frame, 0);
             if let Err(e) = render_client.write_to_device(available, &output_bytes, None) {
+                consec_errors += 1;
                 log::warn!("write silence: {e:?}");
+                if is_device_lost_error(&e) || consec_errors >= 5 {
+                    if let Some(p) = piste.as_ref() {
+                        p.is_stopped.store(true, Ordering::SeqCst);
+                    }
+                    crate::core::audio_player::output::shared_engine::notify_lost(&dev_label, None);
+                    return Err(WasapiPlayerError::Runtime(format!("device lost: {e:?}")));
+                }
             }
             continue;
         };
-        let needed_samples = available * format.channels as usize;
+        let src_ch = p.sym.output_channels.max(1) as usize;
+        let dst_ch = format.channels.max(1) as usize;
+        let need_mono_expand = src_ch == 1 && dst_ch == 2;
+        let src_needed = available * src_ch;
+        let needed_samples = available * dst_ch;
 
         // Saut : on vide l'anneau, on repositionne le FullBuffer, silence puis fondu.
         if p.seek_flush.load(Ordering::Acquire) {
@@ -726,7 +790,13 @@ fn engine_inner(
             output_bytes.clear();
             output_bytes.resize(available * bytes_per_frame, 0);
             if let Err(e) = render_client.write_to_device(available, &output_bytes, None) {
+                consec_errors += 1;
                 log::warn!("write silence post-seek: {e:?}");
+                if is_device_lost_error(&e) || consec_errors >= 5 {
+                    p.is_stopped.store(true, Ordering::SeqCst);
+                    crate::core::audio_player::output::shared_engine::notify_lost(&dev_label, None);
+                    return Err(WasapiPlayerError::Runtime(format!("device lost: {e:?}")));
+                }
             }
             continue;
         }
@@ -734,17 +804,18 @@ fn engine_inner(
         // LiveDecode (anneau) ou FullBuffer (piste décodée en RAM).
         interleaved_f32.clear();
         interleaved_f32.resize(needed_samples, 0.0);
+        let mut fb_advance: Option<(usize, usize)> = None;
         let source_mode = p.sym.current_source.load(Ordering::Acquire);
         let popped: usize = if source_mode == 0 {
-            p.source.read(&mut interleaved_f32)
+            p.source.read(&mut interleaved_f32[..src_needed])
         } else if p.sym.is_full_buffer_ready.load(Ordering::Relaxed) {
             match p.sym.full_buffer_data.read() {
                 Ok(fb) => {
                     let cursor = p.sym.full_buffer_cursor.load(Ordering::Relaxed);
-                    let n = fb.len().saturating_sub(cursor).min(needed_samples);
+                    let n = fb.len().saturating_sub(cursor).min(src_needed);
                     if n > 0 {
                         interleaved_f32[..n].copy_from_slice(&fb[cursor..cursor + n]);
-                        p.sym.full_buffer_cursor.fetch_add(n, Ordering::Relaxed);
+                        fb_advance = Some((cursor, cursor + n));
                     }
                     n
                 }
@@ -753,15 +824,15 @@ fn engine_inner(
         } else {
             0
         };
-        interleaved_f32[popped..].fill(0.0);
-
-        if popped > 0 {
-            if source_mode == 1 {
-                let cursor = p.sym.full_buffer_cursor.load(Ordering::Relaxed);
-                p.current_position_frames.store(cursor / p.sym.output_channels as usize, Ordering::Relaxed);
-            } else {
-                p.current_position_frames.fetch_add(popped / format.channels as usize, Ordering::Relaxed);
+        interleaved_f32[popped..src_needed].fill(0.0);
+        if need_mono_expand {
+            for i in (0..available).rev() {
+                let s = interleaved_f32[i];
+                interleaved_f32[i * 2 + 1] = s;
+                interleaved_f32[i * 2] = s;
             }
+        } else {
+            interleaved_f32[popped..].fill(0.0);
         }
 
         // Volume, Replay Gain et fondu ; neutres, ils laissent les échantillons intacts.
@@ -783,6 +854,16 @@ fn engine_inner(
                     output_bytes.extend_from_slice(&(samples::to_i24(*s) << 8).to_le_bytes());
                 }
             }
+            (32, WasapiSampleType::Int) => {
+                for s in &interleaved_f32 {
+                    output_bytes.extend_from_slice(&samples::to_i32(*s).to_le_bytes());
+                }
+            }
+            (32, WasapiSampleType::Float) => {
+                for s in &interleaved_f32 {
+                    output_bytes.extend_from_slice(&s.clamp(-1.0, 1.0).to_le_bytes());
+                }
+            }
             _ => {
                 return Err(WasapiPlayerError::Runtime(format!(
                     "Format inattendu : {}-bit {:?}",
@@ -793,6 +874,23 @@ fn engine_inner(
 
         match render_client.write_to_device(available, &output_bytes, None) {
             Ok(()) => {
+                consec_errors = 0;
+                // Commit curseur & position UNIQUEMENT après écriture réussie, sans écraser un seek récent.
+                if popped > 0 && !p.seek_flush.load(Ordering::Acquire) {
+                    if let Some((old_cursor, new_cursor)) = fb_advance {
+                        if p.sym
+                            .full_buffer_cursor
+                            .compare_exchange(old_cursor, new_cursor, Ordering::AcqRel, Ordering::Relaxed)
+                            .is_ok()
+                        {
+                            p.current_position_frames
+                                .store(new_cursor / src_ch, Ordering::Relaxed);
+                        }
+                    } else if source_mode == 0 {
+                        p.current_position_frames
+                            .fetch_add(popped / src_ch, Ordering::Relaxed);
+                    }
+                }
                 if !premier_tampon {
                     premier_tampon = true;
                     p.stream_ready.store(true, Ordering::Release);
@@ -803,7 +901,15 @@ fn engine_inner(
                     }
                 }
             }
-            Err(e) => log::warn!("write_to_device: {e:?}"),
+            Err(e) => {
+                consec_errors += 1;
+                log::warn!("write_to_device: {e:?}");
+                if is_device_lost_error(&e) || consec_errors >= 5 {
+                    p.is_stopped.store(true, Ordering::SeqCst);
+                    crate::core::audio_player::output::shared_engine::notify_lost(&dev_label, None);
+                    return Err(WasapiPlayerError::Runtime(format!("device lost: {e:?}")));
+                }
+            }
         }
     }
 
@@ -834,7 +940,7 @@ fn write_dop_block(
     channels: usize,
     marker_b: &mut bool,
     frames: usize,
-) {
+) -> Result<(), wasapi::WasapiError> {
     use crate::core::audio_decoder::dsd::dop_encoder::{dop_silence_payload, stamp_marker};
     output_bytes.clear();
     output_bytes.reserve(frames * channels * 4);
@@ -852,7 +958,7 @@ fn write_dop_block(
         }
         *marker_b = !*marker_b; // le marqueur alterne à CHAQUE trame
     }
-    let _ = render_client.write_to_device(frames, output_bytes, None);
+    render_client.write_to_device(frames, output_bytes, None)
 }
 
 /// Boucle de rendu WASAPI exclusive en mode **DoP** (DSD over PCM).
@@ -883,7 +989,7 @@ where
         audio_started,
         started_ok,
     } = ctl;
-    ensure_com_initialized_current_thread().map_err(WasapiPlayerError::ComInit)?;
+    let _com = ComMtaGuard::acquire().map_err(WasapiPlayerError::ComInit)?;
 
     // ─── 1. Device + AudioClient (device sélectionné, fallback default) ───
     let enumerator = DeviceEnumerator::new()
@@ -933,7 +1039,7 @@ where
     if let Ok(buffer_frames) = audio_client.get_available_space_in_frames() {
         let bf = buffer_frames as usize;
         if bf > 0 {
-            write_dop_block(&render_client, &mut output_bytes, &[], channels as usize, &mut marker_b, bf);
+            let _ = write_dop_block(&render_client, &mut output_bytes, &[], channels as usize, &mut marker_b, bf);
         }
     }
 
@@ -947,16 +1053,9 @@ where
         carrier_rate, channels, period_hns / 10_000
     );
 
-    // ─── Warm-up : silence DSD le temps que le DAC verrouille ───
-    // Un DAC DSD se MUTE pendant qu'il acquiert le lock (jusqu'à ~1-2 s selon le
-    // modèle). Si on envoie la musique tout de suite, ce début est perdu
-    // (inaudible). On écrit donc du silence DSD pendant `warmup_frames` SANS
-    // consommer la musique, le temps que le DAC verrouille. La musique n'est
-    // consommée qu'ensuite → aucun début perdu. Pendant ce temps le compteur
-    // reste figé (le thread orchestrateur garde `playback-preparing: true`
-    // jusqu'à ce que `audio_started` passe à true).
     let warmup_frames: usize = (carrier_rate as f64 * PRECHAUFFAGE_S) as usize; // lock DAC
     let mut warmed: usize = 0;
+    let mut consec_errors: u32 = 0;
 
     loop {
         if is_stopped.load(Ordering::Relaxed) {
@@ -969,7 +1068,7 @@ where
                 if let Ok(avail) = audio_client.get_available_space_in_frames() {
                     let avail = avail as usize;
                     if avail > 0 {
-                        write_dop_block(&render_client, &mut output_bytes, &[], channels as usize, &mut marker_b, avail);
+                        let _ = write_dop_block(&render_client, &mut output_bytes, &[], channels as usize, &mut marker_b, avail);
                     }
                 }
             }
@@ -979,9 +1078,16 @@ where
             continue;
         }
         let available = match audio_client.get_available_space_in_frames() {
-            Ok(n) => n as usize,
+            Ok(n) => {
+                consec_errors = 0;
+                n as usize
+            }
             Err(e) => {
+                consec_errors += 1;
                 log::warn!("DoP get_available_space: {e:?}");
+                if is_device_lost_error(&e) || consec_errors >= 5 {
+                    return Err(WasapiPlayerError::Runtime(format!("DoP device lost: {e:?}")));
+                }
                 continue;
             }
         };
@@ -995,7 +1101,12 @@ where
             let to_skip = consumer.occupied_len();
             consumer.skip(to_skip);
             drain_request.store(false, Ordering::Release);
-            write_dop_block(&render_client, &mut output_bytes, &[], channels as usize, &mut marker_b, available);
+            if let Err(e) = write_dop_block(&render_client, &mut output_bytes, &[], channels as usize, &mut marker_b, available) {
+                consec_errors += 1;
+                if is_device_lost_error(&e) || consec_errors >= 5 {
+                    return Err(WasapiPlayerError::Runtime(format!("DoP device lost: {e:?}")));
+                }
+            }
             continue;
         }
 
@@ -1004,15 +1115,24 @@ where
             let to_skip = consumer.occupied_len();
             consumer.skip(to_skip);
             seek_flush.store(false, Ordering::Release);
-            write_dop_block(&render_client, &mut output_bytes, &[], channels as usize, &mut marker_b, available);
+            if let Err(e) = write_dop_block(&render_client, &mut output_bytes, &[], channels as usize, &mut marker_b, available) {
+                consec_errors += 1;
+                if is_device_lost_error(&e) || consec_errors >= 5 {
+                    return Err(WasapiPlayerError::Runtime(format!("DoP device lost: {e:?}")));
+                }
+            }
             continue;
         }
 
-        // Warm-up : silence DSD tant que le DAC n'a pas verrouillé. On ne
-        // consomme PAS la musique → le début n'est pas perdu. `audio_started`
-        // signale la fin du warm-up (dé-fige le compteur côté frontend).
+        // Warm-up : silence DSD tant que le DAC n'a pas verrouillé.
         if warmed < warmup_frames {
-            write_dop_block(&render_client, &mut output_bytes, &[], channels as usize, &mut marker_b, available);
+            if let Err(e) = write_dop_block(&render_client, &mut output_bytes, &[], channels as usize, &mut marker_b, available) {
+                consec_errors += 1;
+                if is_device_lost_error(&e) || consec_errors >= 5 {
+                    return Err(WasapiPlayerError::Runtime(format!("DoP device lost: {e:?}")));
+                }
+                continue;
+            }
             warmed += available;
             if warmed >= warmup_frames {
                 audio_started.store(true, Ordering::Relaxed);
@@ -1023,7 +1143,12 @@ where
 
         // Pause : silence DoP (le DAC reste locké en DSD).
         if is_paused.load(Ordering::Relaxed) {
-            write_dop_block(&render_client, &mut output_bytes, &[], channels as usize, &mut marker_b, available);
+            if let Err(e) = write_dop_block(&render_client, &mut output_bytes, &[], channels as usize, &mut marker_b, available) {
+                consec_errors += 1;
+                if is_device_lost_error(&e) || consec_errors >= 5 {
+                    return Err(WasapiPlayerError::Runtime(format!("DoP device lost: {e:?}")));
+                }
+            }
             continue;
         }
 
@@ -1031,25 +1156,31 @@ where
         interleaved.clear();
         interleaved.resize(needed, 0);
         let popped = consumer.pop_slice(&mut interleaved);
-        // On aligne sur une frame complète (pop_slice peut s'arrêter au milieu).
         let popped_frames = popped / channels as usize;
         let popped_aligned = popped_frames * channels as usize;
 
-        // Position : chaque trame porteuse = 16 samples DSD ; frames/carrier = secondes.
-        if popped_frames > 0 {
-            current_position_frames.fetch_add(popped_frames, Ordering::Relaxed);
-        }
-
-        // Écriture : les frames réelles + complétion silence si underrun. Le
-        // marqueur est posé en continu par write_dop_block (une seule source).
-        write_dop_block(
+        match write_dop_block(
             &render_client,
             &mut output_bytes,
             &interleaved[..popped_aligned],
             channels as usize,
             &mut marker_b,
             available,
-        );
+        ) {
+            Ok(()) => {
+                consec_errors = 0;
+                if popped_frames > 0 {
+                    current_position_frames.fetch_add(popped_frames, Ordering::Relaxed);
+                }
+            }
+            Err(e) => {
+                consec_errors += 1;
+                log::warn!("DoP write_to_device: {e:?}");
+                if is_device_lost_error(&e) || consec_errors >= 5 {
+                    return Err(WasapiPlayerError::Runtime(format!("DoP device lost: {e:?}")));
+                }
+            }
+        }
     }
 
     if let Err(e) = audio_client.stop_stream() {

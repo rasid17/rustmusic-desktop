@@ -141,21 +141,31 @@ fn track_sidecars(from: &str, to: &str) -> Vec<(String, String)> {
     let to_dir = parent_of(to);
     let from_stem = stem_of(&file_name(from));
     let to_stem = stem_of(&file_name(to));
+    let from_parent = std::path::Path::new(&from_dir);
+    let to_parent = std::path::Path::new(&to_dir);
 
     TRACK_SIDECARS
         .iter()
         .filter_map(|ext| {
-            let source = format!("{from_dir}/{from_stem}.{ext}");
-            if !std::path::Path::new(&source).exists() {
+            let source = from_parent.join(format!("{from_stem}.{ext}"));
+            if !source.exists() {
                 // Certains systèmes rendent `.LRC` : on tente aussi la
                 // majuscule plutôt que d'abandonner les paroles pour une casse.
-                let upper = format!("{from_dir}/{from_stem}.{}", ext.to_uppercase());
-                if !std::path::Path::new(&upper).exists() {
+                let upper = from_parent.join(format!("{from_stem}.{}", ext.to_uppercase()));
+                if !upper.exists() {
                     return None;
                 }
-                return Some((upper, format!("{to_dir}/{to_stem}.{}", ext.to_uppercase())));
+                let dest = to_parent.join(format!("{to_stem}.{}", ext.to_uppercase()));
+                return Some((
+                    upper.to_string_lossy().into_owned(),
+                    dest.to_string_lossy().into_owned(),
+                ));
             }
-            Some((source, format!("{to_dir}/{to_stem}.{ext}")))
+            let dest = to_parent.join(format!("{to_stem}.{ext}"));
+            Some((
+                source.to_string_lossy().into_owned(),
+                dest.to_string_lossy().into_owned(),
+            ))
         })
         .collect()
 }
@@ -165,6 +175,8 @@ fn folder_satellites(from_dir: &str, to_dir: &str) -> Vec<(String, String)> {
     let Ok(entries) = std::fs::read_dir(from_dir) else {
         return Vec::new();
     };
+    let from_parent = std::path::Path::new(from_dir);
+    let to_parent = std::path::Path::new(to_dir);
     entries
         .filter_map(|entry| {
             let entry = entry.ok()?;
@@ -175,7 +187,10 @@ fn folder_satellites(from_dir: &str, to_dir: &str) -> Vec<(String, String)> {
             if !is_folder_satellite(&name) {
                 return None;
             }
-            Some((format!("{from_dir}/{name}"), format!("{to_dir}/{name}")))
+            Some((
+                from_parent.join(&name).to_string_lossy().into_owned(),
+                to_parent.join(&name).to_string_lossy().into_owned(),
+            ))
         })
         .collect()
 }
@@ -211,6 +226,10 @@ fn cleanup_empty_dirs(dirs: &[String], roots: &[String]) {
 /// vérifier, puis supprimer — et ne supprimer qu'**après** vérification. Une
 /// copie tronquée suivie d'une suppression, c'est le fichier perdu.
 fn move_file(from: &str, to: &str) -> std::io::Result<()> {
+    if from == to {
+        return Ok(());
+    }
+
     let source = std::path::Path::new(from);
     let target = std::path::Path::new(to);
 
@@ -218,18 +237,56 @@ fn move_file(from: &str, to: &str) -> std::io::Result<()> {
         std::fs::create_dir_all(parent)?;
     }
 
+    // Renommage de casse uniquement sur un système insensible (Windows) :
+    // passer par un nom temporaire intermédiaire, jamais par `fs::copy` sur le
+    // même inode (qui tronquerait le fichier à 0 octet).
+    if same_path(from, to) {
+        if std::fs::rename(source, target).is_ok() {
+            return Ok(());
+        }
+        let parent = target.parent().unwrap_or_else(|| std::path::Path::new("."));
+        let temp_path = parent.join(format!(".rustmusic-case-{}", uuid::Uuid::new_v4().simple()));
+        std::fs::rename(source, &temp_path)?;
+        if let Err(err) = std::fs::rename(&temp_path, target) {
+            let _ = std::fs::rename(&temp_path, source);
+            return Err(err);
+        }
+        return Ok(());
+    }
+
+    if target.exists() {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::AlreadyExists,
+            format!("Le fichier cible existe déjà : {to}"),
+        ));
+    }
+
     match std::fs::rename(source, target) {
         Ok(()) => Ok(()),
         Err(rename_error) => {
-            // Le repli couvre le changement de volume, mais aussi les systèmes
-            // de fichiers réseau qui refusent `rename` pour d'autres raisons.
-            // On ne cherche pas à distinguer : ce qui compte est de ne rien
-            // supprimer avant d'avoir vérifié.
-            let copied = std::fs::copy(source, target)?;
-            let expected = std::fs::metadata(source)?.len();
-            if copied != expected {
-                let _ = std::fs::remove_file(target);
-                return Err(rename_error);
+            // Repli inter-volumes sûr : copie vers un temporaire dans le même
+            // dossier cible, sync, renommage atomique vers cible, puis suppression source.
+            let parent = target.parent().unwrap_or_else(|| std::path::Path::new("."));
+            let temp_target =
+                parent.join(format!(".rustmusic-move-{}", uuid::Uuid::new_v4().simple()));
+            let copy_res = (|| -> std::io::Result<()> {
+                let copied = std::fs::copy(source, &temp_target)?;
+                let expected = std::fs::metadata(source)?.len();
+                if copied != expected {
+                    return Err(rename_error);
+                }
+                if let Ok(f) = std::fs::File::open(&temp_target) {
+                    let _ = f.sync_all();
+                }
+                Ok(())
+            })();
+            if let Err(e) = copy_res {
+                let _ = std::fs::remove_file(&temp_target);
+                return Err(e);
+            }
+            if let Err(e) = std::fs::rename(&temp_target, target) {
+                let _ = std::fs::remove_file(&temp_target);
+                return Err(e);
             }
             std::fs::remove_file(source)?;
             Ok(())
@@ -314,7 +371,7 @@ pub async fn apply_moves(
         }
 
         let outcome = async {
-            let mut tx = pool.begin().await?;
+            let mut tx = pool.begin_with("BEGIN IMMEDIATE").await?;
             TrackPathRepository::repoint(&mut tx, &from, &to).await?;
             tx.commit().await
         }
@@ -530,7 +587,7 @@ pub async fn undo_batch(pool: &SqlitePool, batch_id: &str) -> Result<MoveOutcome
         }
 
         let outcome = async {
-            let mut tx = pool.begin().await?;
+            let mut tx = pool.begin_with("BEGIN IMMEDIATE").await?;
             TrackPathRepository::repoint(&mut tx, &after, &before).await?;
             tx.commit().await
         }

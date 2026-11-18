@@ -166,7 +166,11 @@
     <OptionBlock keywords="qr code mobile url lan address" class="flex flex-col sm:flex-row items-center gap-5 px-5 py-5">
       {#if mobileStatus.qr_svg}
         <div class="w-36 h-36 shrink-0 rounded-2xl p-2 bg-white shadow-md border border-(--rg-bd)">
-          {@html mobileStatus.qr_svg}
+          <img
+            src={`data:image/svg+xml;utf8,${encodeURIComponent(mobileStatus.qr_svg)}`}
+            alt="Mobile Remote QR Code"
+            class="w-full h-full object-contain"
+          />
         </div>
       {/if}
       <div class="flex-1 min-w-0 space-y-2 text-center sm:text-left">

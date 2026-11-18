@@ -85,8 +85,9 @@ impl Server {
     /// Tous les morceaux d'une bibliothèque ; `progress` reçoit le nombre déjà listé.
     pub async fn all_songs(&self, folder_id: &str, mut progress: impl FnMut(usize)) -> Result<Vec<RemoteSong>, String> {
         let mut songs = Vec::new();
+        let mut start_index = 0usize;
         loop {
-            let start = songs.len().to_string();
+            let start = start_index.to_string();
             let limit = PAGE.to_string();
             let page = self
                 .get(
@@ -98,8 +99,9 @@ impl Server {
             let got = items.len();
             songs.extend(items.iter().filter_map(parse_song));
             progress(songs.len());
+            start_index += got;
             let total = page["TotalRecordCount"].as_u64().unwrap_or(0) as usize;
-            if got < PAGE || songs.len() >= total {
+            if got == 0 || got < PAGE || start_index >= total {
                 break;
             }
         }

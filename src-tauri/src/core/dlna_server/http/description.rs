@@ -11,11 +11,27 @@
 
 use axum::extract::{Path, State};
 use axum::http::{header, StatusCode};
-use axum::response::{IntoResponse, Response};
+use axum::response::{Html, IntoResponse, Response};
 
 use crate::core::dlna_server::http::router::AppState;
 
 const XML_HEADER: &str = "text/xml; charset=\"utf-8\"";
+
+/// `GET /` → lightweight status page so opening the base DLNA URL in a browser
+/// works instead of returning 404 Not Found.
+pub async fn status_page(State(state): State<AppState>) -> Response {
+    let name = escape_xml(&state.config.friendly_name);
+    let base = state.server_base_url();
+    Html(format!(
+        "<!doctype html><html><head><meta charset=\"utf-8\"><title>{name}</title></head>\
+         <body style=\"font-family:system-ui,sans-serif;max-width:560px;margin:48px auto;padding:0 16px;line-height:1.5\">\
+         <h2>{name}</h2>\
+         <p>RustMusic DLNA / UPnP MediaServer is running on <code>{base}</code>.</p>\
+         <p>UPnP Device Description: <a href=\"/description.xml\"><code>/description.xml</code></a></p>\
+         </body></html>"
+    ))
+    .into_response()
+}
 
 /// `GET /description.xml` → top-level UPnP device description.
 pub async fn device_description(State(state): State<AppState>) -> Response {

@@ -173,21 +173,69 @@ impl LibraryStatsRepository {
         pool: &SqlitePool,
         library_id: i64,
     ) -> Vec<(String, String, i64, Option<String>)> {
-        sqlx::query_as::<_, (String, String, i64, Option<String>)>(
+        match sqlx::query_as::<_, (String, String, i64, Option<String>)>(
             r#"SELECT
                 COALESCE(lt.title, '') AS title,
-                COALESCE(lt.artist, '') AS artist,
+                COALESCE(NULLIF(a.name, ''), NULLIF(lc.artist, ''), '') AS artist,
                 lt.play_count,
                 lc.thumbnail_path
                FROM library_tracks lt
                INNER JOIN library_files lf ON lf.id = lt.file_id AND NOT EXISTS (SELECT 1 FROM library_dirs ld WHERE ld.id = lf.library_dir_id AND ld.is_active = 0)
                LEFT JOIN library_cache lc ON lc.id = lt.cache_id
+               LEFT JOIN artists a ON a.id = lt.artist_id
                WHERE lt.library_id = ? AND lt.play_count > 0
                ORDER BY lt.play_count DESC LIMIT 10"#,
         )
         .bind(library_id)
         .fetch_all(pool)
         .await
-        .unwrap_or_default()
+        {
+            Ok(rows) => rows,
+            Err(e) => {
+                log::error!("get_top_played SQL error: {e}");
+                Vec::new()
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn get_top_played_succeeds_against_real_schema() {
+        let pool = SqlitePool::connect("sqlite::memory:").await.unwrap();
+        sqlx::migrate!("./SQL/").run(&pool).await.unwrap();
+        sqlx::query("INSERT OR IGNORE INTO profil (id, name) VALUES (1, 'Socle')")
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query("INSERT OR IGNORE INTO library (id, profil_id, name) VALUES (1, 1, 'Lib')")
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query("INSERT INTO artists (id, name, name_normalized, sort_name) VALUES ('a1', 'Daft Punk', 'daft punk', 'Daft Punk')")
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query("INSERT INTO library_dirs (id, library_id, path, name) VALUES ('d1', 1, '/m', 'm')")
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query("INSERT INTO library_files (id, library_id, library_dir_id, path, filename, extension, size, status) VALUES ('f1', 1, 'd1', '/m/a.flac', 'a.flac', 'flac', 100, 'indexed')")
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query("INSERT INTO library_tracks (id, library_id, file_id, artist_id, title, title_normalized, play_count) VALUES ('t1', 1, 'f1', 'a1', 'One More Time', 'one more time', 7)")
+            .execute(&pool)
+            .await
+            .unwrap();
+
+        let top = LibraryStatsRepository::get_top_played(&pool, 1).await;
+        assert_eq!(top.len(), 1);
+        assert_eq!(top[0].0, "One More Time");
+        assert_eq!(top[0].1, "Daft Punk");
+        assert_eq!(top[0].2, 7);
     }
 }

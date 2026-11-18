@@ -96,9 +96,15 @@ pub async fn play_file(app_handle: AppHandle, path: String) {
     let whole = playback::target() == playback::Target::Upnp;
     let pool = app_handle.state::<AppState>().pool.clone();
     if let Err(e) = podcast_service::prepare(&pool, &path_file, whole).await {
+        if PLAY_REQUEST.load(Ordering::SeqCst) != request {
+            return;
+        }
         log::warn!("🎙️  Épisode illisible : {e}");
         let _ = app_handle.emit("playback-preparing", false);
         let _ = app_handle.emit("podcast-error", e);
+        return;
+    }
+    if PLAY_REQUEST.load(Ordering::SeqCst) != request {
         return;
     }
     // Morceau d'un serveur : pris dans le cache ou téléchargé pendant l'écoute.
@@ -136,7 +142,9 @@ pub async fn pause_play() {
 }
 
 #[tauri::command]
-pub async fn stop_play() {
+pub async fn stop_play(app_handle: AppHandle) {
+    PLAY_REQUEST.fetch_add(1, Ordering::SeqCst);
+    let _ = app_handle.emit("playback-preparing", false);
     playback::stop().await;
 }
 

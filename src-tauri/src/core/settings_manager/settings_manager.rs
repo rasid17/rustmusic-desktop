@@ -1,6 +1,5 @@
 use serde::{Deserialize, Serialize};
-use std::path::Path;
-use std::{env, fs, io};
+use std::{fs, io};
 use std::{fs::File, path::PathBuf};
 
 #[derive(Serialize, Deserialize)]
@@ -22,29 +21,41 @@ pub struct SettingsManager;
 
 impl SettingsManager {
     pub fn get_config_file() -> PathBuf {
-        let home_dir = match env::var_os("HOME") {
-            // Pour les systèmes Unix-like
-            Some(path) => PathBuf::from(path),
-            None => match env::var_os("USERPROFILE") {
-                // Pour Windows
-                Some(path) => PathBuf::from(path),
-                None => PathBuf::new(), // Retourner un chemin vide en cas d'erreur
-            },
-        };
-
-        let mut config_path = home_dir;
-        config_path.push(".rust-music");
-
-        //Si le dossier n'existe pas on le créé
-        let exist_dir: bool = Path::new(&config_path).is_dir();
-        if !exist_dir {
-            let _ = fs::create_dir(&config_path);
+        // Sur Flatpak, ~/.rust-music peut être sur tmpfs sauf --persist : on privilégie
+        // $XDG_CONFIG_HOME (toujours persistant) tout en gardant la compatibilité si
+        // l'ancien fichier existe.
+        if crate::core::sandbox::flatpak_id().is_some() {
+            if let Some(cfg_dir) = dirs::config_dir() {
+                let xdg_path = cfg_dir.join("com.larevuegeek.rustmusic").join("config.json");
+                let legacy_path = dirs::home_dir()
+                    .map(|h| h.join(".rust-music").join("config.json"));
+                if !xdg_path.exists() {
+                    if let Some(ref legacy) = legacy_path {
+                        if legacy.exists() {
+                            if let Some(parent) = xdg_path.parent() {
+                                let _ = fs::create_dir_all(parent);
+                            }
+                            let _ = fs::copy(legacy, &xdg_path);
+                        }
+                    }
+                }
+                if let Some(parent) = xdg_path.parent() {
+                    let _ = fs::create_dir_all(parent);
+                }
+                return xdg_path;
+            }
         }
 
-        //On ajoute le fichier de configuration
-        config_path.push("config.json");
+        let base_dir = dirs::home_dir()
+            .or_else(dirs::config_dir)
+            .or_else(dirs::data_dir)
+            .unwrap_or_else(std::env::temp_dir);
 
-        config_path
+        let config_dir = base_dir.join(".rust-music");
+        if !config_dir.is_dir() {
+            let _ = fs::create_dir_all(&config_dir);
+        }
+        config_dir.join("config.json")
     }
 
     pub fn save_config(config: &Config) -> io::Result<()> {

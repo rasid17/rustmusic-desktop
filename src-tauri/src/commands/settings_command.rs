@@ -24,7 +24,11 @@ pub async fn set_setting(
 ) -> Result<(), String> {
     SettingsRepository::set(&state.pool, &key, &value)
         .await
-        .map_err(|e| format!("Failed to set setting: {}", e))
+        .map_err(|e| format!("Failed to set setting: {}", e))?;
+    if key == "minimize_to_tray" {
+        crate::set_minimize_to_tray(value == "true");
+    }
+    Ok(())
 }
 
 #[tauri::command]

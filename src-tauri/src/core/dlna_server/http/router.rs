@@ -47,7 +47,10 @@ impl AppState {
 /// parameter and the handler strips the `.xml` suffix itself.
 pub fn build_router(state: AppState) -> Router {
     Router::new()
+        .route("/", get(description::status_page))
         .route("/description.xml", get(description::device_description))
+        .route("/rootDesc.xml", get(description::device_description))
+        .route("/DeviceDescription.xml", get(description::device_description))
         .route("/service/{name}", get(description::service_description))
         .route("/control/{service}", post(control::soap_control))
         .route("/media/{id}", get(media::stream_media))
@@ -76,5 +79,47 @@ mod host_tests {
         assert_eq!(base_from_host(Some("evil\"><x>"), 8200), None);
         assert_eq!(base_from_host(Some(""), 8200), None);
         assert_eq!(base_from_host(None, 8200), None);
+    }
+
+    #[tokio::test]
+    async fn root_and_description_aliases_return_ok() {
+        use std::path::PathBuf;
+        use async_trait::async_trait;
+        use axum::body::Body;
+        use axum::http::{Request, StatusCode};
+        use tower::ServiceExt;
+        use crate::core::dlna_server::error::DlnaError;
+        use crate::core::dlna_server::library::provider::{CoverKind, DlnaAlbum, DlnaArtist, DlnaFolder, DlnaLibrary, DlnaTrack, FolderEntries, LibraryProvider};
+
+        struct Dummy;
+        #[async_trait]
+        impl LibraryProvider for Dummy {
+            async fn list_libraries(&self) -> Result<Vec<DlnaLibrary>, DlnaError> { Ok(vec![]) }
+            async fn list_artists(&self, _: i64) -> Result<Vec<DlnaArtist>, DlnaError> { Ok(vec![]) }
+            async fn list_albums(&self, _: i64) -> Result<Vec<DlnaAlbum>, DlnaError> { Ok(vec![]) }
+            async fn list_albums_by_artist(&self, _: i64, _: &str) -> Result<Vec<DlnaAlbum>, DlnaError> { Ok(vec![]) }
+            async fn list_tracks_by_album(&self, _: i64, _: &str) -> Result<Vec<DlnaTrack>, DlnaError> { Ok(vec![]) }
+            async fn track_path(&self, _: &str) -> Result<PathBuf, DlnaError> { Ok(PathBuf::new()) }
+            async fn cover_path(&self, _: CoverKind, _: &str) -> Result<PathBuf, DlnaError> { Ok(PathBuf::new()) }
+            async fn list_root_folders(&self, _: i64) -> Result<Vec<DlnaFolder>, DlnaError> { Ok(vec![]) }
+            async fn list_folder_entries(&self, _: i64, _: &str) -> Result<FolderEntries, DlnaError> {
+                Ok(FolderEntries { subfolders: vec![], tracks: vec![] })
+            }
+        }
+
+        let app = super::build_router(super::AppState {
+            config: std::sync::Arc::new(super::DlnaConfig::default()),
+            provider: std::sync::Arc::new(Dummy),
+            local_ip: std::net::Ipv4Addr::new(127, 0, 0, 1),
+        });
+
+        for uri in ["/", "/description.xml", "/rootDesc.xml", "/DeviceDescription.xml"] {
+            let resp = app
+                .clone()
+                .oneshot(Request::builder().uri(uri).body(Body::empty()).unwrap())
+                .await
+                .unwrap();
+            assert_eq!(resp.status(), StatusCode::OK, "failed on {uri}");
+        }
     }
 }

@@ -284,7 +284,7 @@ impl LibraryDirRepository {
         library_id: i64,
         active_ids: &[String],
     ) -> Result<(), sqlx::Error> {
-        let mut tx = pool.begin().await?;
+        let mut tx = pool.begin_with("BEGIN IMMEDIATE").await?;
 
         sqlx::query(
             "UPDATE library_dirs SET is_active = 0, updated_at = CURRENT_TIMESTAMP WHERE library_id = ?"

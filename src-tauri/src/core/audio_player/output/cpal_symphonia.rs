@@ -210,9 +210,9 @@ where
                 output[samples_read..].fill(0.0);
             }
         } else {
-            // Mode FullBuffer
+            // Mode FullBuffer (try_read sans blocage du thread audio temps réel)
             if is_full_buffer_ready.load(Ordering::Relaxed) {
-                if let Ok(fb) = full_buffer_data.read() {
+                if let Ok(fb) = full_buffer_data.try_read() {
                     let cursor: usize = full_buffer_cursor.load(Ordering::Relaxed);
                     let available: usize = fb.len().saturating_sub(cursor);
                     samples_read = available.min(output.len());

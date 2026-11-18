@@ -13,6 +13,7 @@ import { writable, get } from "svelte/store";
 import { availableMonitors, currentMonitor, getCurrentWindow, LogicalSize, PhysicalPosition } from "@tauri-apps/api/window";
 import { invoke } from "@tauri-apps/api/core";
 import { detectOS } from "#lib/helper/tools/osDetection";
+import { loadPlatformFeatures, platformFeatures } from "#lib/stores/settings/platform.store";
 
 export type MiniPlayerStyle = "classic" | "pill" | "sleeve";
 export type MiniClassicLayout = "card" | "bar" | "large";
@@ -42,15 +43,31 @@ export const miniPlayerStyle = writable<MiniPlayerStyle>(readMiniStyle());
 /** Variante de mise en page lorsque le style `classic` est actif : `card` | `bar` | `large`. */
 export const miniClassicLayout = writable<MiniClassicLayout>(readMiniClassicLayout());
 
+function isMiniWindowContext(): boolean {
+  try {
+    return getCurrentWindow().label === "mini";
+  } catch {
+    return false;
+  }
+}
+
 if (typeof window !== "undefined") {
   window.addEventListener("storage", (e) => {
-    if (e.key === MINI_STYLE_KEY && (e.newValue === "classic" || e.newValue === "pill" || e.newValue === "sleeve")) {
-      void setMiniStyle(e.newValue);
+    if (
+      e.key === MINI_STYLE_KEY &&
+      (e.newValue === "classic" || e.newValue === "pill" || e.newValue === "sleeve")
+    ) {
+      if (isMiniWindowContext()) void setMiniStyle(e.newValue);
+      else miniPlayerStyle.set(e.newValue);
     } else if (
       e.key === MINI_CLASSIC_LAYOUT_KEY &&
       (e.newValue === "card" || e.newValue === "bar" || e.newValue === "large")
     ) {
-      void setMiniClassicLayout(e.newValue);
+      if (isMiniWindowContext()) void setMiniClassicLayout(e.newValue);
+      else {
+        miniClassicLayout.set(e.newValue);
+        miniPlayerStyle.set("classic");
+      }
     }
   });
 }
@@ -133,18 +150,25 @@ let bascule = false;
 // passe par la taille demandée au widget (commande `set_compact_window_size`).
 const gtkSize = detectOS() === "linux";
 
+async function isWaylandSession(): Promise<boolean> {
+  if (!gtkSize) return false;
+  const cached = get(platformFeatures);
+  if (cached.wayland) return true;
+  return (await loadPlatformFeatures()).wayland;
+}
+
 async function applyMiniSize(width: number, height: number): Promise<void> {
   if (gtkSize) await invoke("set_compact_window_size", { width: Math.round(width), height: Math.round(height) });
   else await getCurrentWindow().setSize(new LogicalSize(width, height));
 }
 
-// Position du micro-lecteur, retenue d'une fois sur l'autre. Wayland ne donne ni ne
-// laisse choisir la position d'une fenêtre : rien à retenir sous Linux.
+// Position du micro-lecteur, retenue d'une fois sur l'autre. Seul Wayland interdit
+// la lecture/placement programmatique de position ; X11, Windows, etc. fonctionnent.
 const MICRO_POS_KEY = "rustmusic:micro-pos";
 let stopTrackingMicroPos: (() => void) | null = null;
 
 async function restoreMicroPosition(): Promise<void> {
-  if (gtkSize) return;
+  if (await isWaylandSession()) return;
   try {
     const saved = JSON.parse(localStorage.getItem(MICRO_POS_KEY) ?? "null");
     if (typeof saved?.x !== "number" || typeof saved?.y !== "number") return;
@@ -158,7 +182,7 @@ async function restoreMicroPosition(): Promise<void> {
 }
 
 async function trackMicroPosition(): Promise<void> {
-  if (gtkSize) return;
+  if (await isWaylandSession()) return;
   untrackMicroPosition();
   stopTrackingMicroPos = await getCurrentWindow().onMoved(({ payload }) => {
     try {
@@ -235,7 +259,7 @@ export async function cycleMiniStyle(): Promise<void> {
 
 /** Garde la fenêtre entière dans la zone de travail de l'écran : collée au bord, elle ne déborde plus en grandissant. */
 async function keepOnScreen(width: number, height: number): Promise<void> {
-  if (gtkSize) return;
+  if (await isWaylandSession()) return;
   try {
     const win = getCurrentWindow();
     const monitor = await currentMonitor();

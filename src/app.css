@@ -716,7 +716,7 @@ html, body {
    ═══════════════════════════════════════════════════════════════════════ */
 :root {
   --rg-bg: #f6f4ef; --rg-aside: #efece5; --rg-aside-bd: #e2ddd3;
-  --rg-champ: #f8f6f1; --rg-carte: #ffffff; --rg-s2: #f1eee8; --rg-hover: #faf8f4;
+  --rg-champ: #f8f6f1; --rg-carte: #ffffff; --rg-s1: #f8f6f1; --rg-s2: #f1eee8; --rg-hover: #faf8f4;
   --rg-bd: #e2ddd3; --rg-bd2: #cfc9bd; --rg-line: #eeeae3;
   --rg-tx: #1a1c1a; --rg-tx2: #3d403c; --rg-nav: #262925; --rg-sous: #5e625d;
   --rg-mu: #5e625d; --rg-mu2: #6f736d; --rg-ph: #8a8e88;
@@ -729,7 +729,7 @@ html, body {
 }
 .dark {
   --rg-bg: #0b0d0c; --rg-aside: #0b0d0c; --rg-aside-bd: #161a18;
-  --rg-champ: #131715; --rg-carte: #131715; --rg-s2: #1b211e; --rg-hover: #161b18;
+  --rg-champ: #131715; --rg-carte: #131715; --rg-s1: #161b18; --rg-s2: #1b211e; --rg-hover: #161b18;
   --rg-bd: #1f2522; --rg-bd2: #2e3632; --rg-line: #1a1f1c;
   --rg-tx: #f2f5f3; --rg-tx2: #cfd6d2; --rg-nav: #e3e8e5; --rg-sous: #9aa39e;
   --rg-mu: #8b948f; --rg-mu2: #6b746f; --rg-ph: #7d8681;

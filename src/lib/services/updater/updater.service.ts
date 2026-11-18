@@ -29,8 +29,14 @@ let pendingUpdate: Update | null = null;
  * cas "pas d'update" et "erreur" pour donner du feedback.
  */
 export async function checkForUpdate(silent = true): Promise<void> {
-  // Flatpak : les mises à jour viennent de Flathub, jamais de l'appli.
-  if ((await loadPlatformFeatures()).flatpak) return;
+  // Flatpak (Flathub) et paquets système Linux (.deb / .rpm / Arch) : mises à jour gérées par le gestionnaire système.
+  const features = await loadPlatformFeatures();
+  if (features.flatpak || !features.updater_supported) {
+    if (!silent) {
+      updaterState.set({ kind: "idle" });
+    }
+    return;
+  }
   // Si déjà en train de télécharger, on ne relance pas une nouvelle check
   const current = get(updaterState);
   if (current.kind === "downloading" || current.kind === "installing") {

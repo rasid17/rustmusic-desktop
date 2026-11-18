@@ -7,7 +7,7 @@
 #![cfg(target_os = "windows")]
 
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Condvar, Mutex};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
@@ -16,8 +16,8 @@ use ringbuf::traits::Consumer;
 use super::traits::{AudioOutput, AudioOutputError};
 use super::types::{AudioBackend, PlaybackAtomics, SymphoniaSharedState};
 use crate::core::audio_player::audio_output_wasapi::{
-    default_output_device_name, run_exclusive_engine, try_negotiate_exclusive_format, FluxPiste,
-    NegotiatedFormat, WasapiSymphoniaState,
+    default_output_device_name, run_exclusive_engine, try_negotiate_exclusive_format,
+    EngineInitSignal, FluxPiste, NegotiatedFormat, WasapiSymphoniaState,
 };
 
 /// Le moteur vivant : son format, sa sortie, et la piste qu'on lui passe.
@@ -26,6 +26,7 @@ struct Moteur {
     sortie: Option<String>,
     prochaine: Arc<Mutex<Option<FluxPiste>>>,
     arret: Arc<AtomicBool>,
+    dead: Arc<AtomicBool>,
     fil: JoinHandle<()>,
 }
 
@@ -50,31 +51,82 @@ pub fn close_engine() {
     }
 }
 
-/// Confie une piste au moteur ; le relance seulement si le format ou la sortie change.
-fn hand_over(format: NegotiatedFormat, sortie: Option<String>, flux: FluxPiste) {
+/// Confie une piste au moteur sous verrou unique (sans TOCTOU ni perte de `consumer` si l'init échoue).
+fn attach_or_start_engine(
+    format: NegotiatedFormat,
+    sortie: Option<String>,
+    make_flux: impl FnOnce() -> FluxPiste,
+) -> Result<Arc<AtomicBool>, String> {
     let mut garde = engine_lock();
     if let Some(m) = garde.as_ref() {
-        if !m.fil.is_finished() && m.format == format && m.sortie == sortie {
+        if !m.dead.load(Ordering::Acquire)
+            && !m.fil.is_finished()
+            && m.format == format
+            && m.sortie == sortie
+        {
+            let dead = m.dead.clone();
+            let flux = make_flux();
             *m.prochaine.lock().unwrap_or_else(|e| e.into_inner()) = Some(flux);
             log::debug!("▶️  WASAPI exclusive : moteur réutilisé ({} Hz)", format.sample_rate);
-            return;
+            return Ok(dead);
         }
     }
     if let Some(ancien) = garde.take() {
         stop_engine(ancien);
     }
-    let prochaine = Arc::new(Mutex::new(Some(flux)));
+
+    let prochaine = Arc::new(Mutex::new(None));
     let arret = Arc::new(AtomicBool::new(false));
-    let (p, a, s) = (prochaine.clone(), arret.clone(), sortie.clone());
+    let dead = Arc::new(AtomicBool::new(false));
+    let init_signal: EngineInitSignal = Arc::new((Mutex::new(None), Condvar::new()));
+    let (p, a, d, sig, s) = (
+        prochaine.clone(),
+        arret.clone(),
+        dead.clone(),
+        init_signal.clone(),
+        sortie.clone(),
+    );
     let fil = std::thread::Builder::new()
         .name("rustmusic-wasapi-render".into())
         .spawn(move || {
-            if let Err(e) = run_exclusive_engine(format, s, p, a) {
+            if let Err(e) = run_exclusive_engine(format, s, p, a, d, sig) {
                 log::error!("❌ WASAPI exclusive : {e}");
             }
         })
-        .expect("fil du moteur WASAPI");
-    *garde = Some(Moteur { format, sortie, prochaine, arret, fil });
+        .map_err(|e| format!("spawn fil WASAPI : {e}"))?;
+
+    // Attendre que initialize_client + start_stream réussissent AVANT de consommer `consumer`
+    // (en cas d'échec, l'appelant retombe proprement sur CPAL shared).
+    let (lock, cv) = &*init_signal;
+    let init_res = {
+        let mut g = lock.lock().unwrap_or_else(|e| e.into_inner());
+        let deadline = Instant::now() + Duration::from_secs(4);
+        while g.is_none() {
+            let rem = deadline.saturating_duration_since(Instant::now());
+            if rem.is_zero() {
+                break;
+            }
+            let (next_g, wait_res) = cv.wait_timeout(g, rem).unwrap_or_else(|e| e.into_inner());
+            g = next_g;
+            if wait_res.timed_out() && g.is_none() {
+                break;
+            }
+        }
+        g.take().unwrap_or_else(|| Err("timeout ouverture stream WASAPI".into()))
+    };
+
+    if let Err(e) = init_res {
+        arret.store(true, Ordering::SeqCst);
+        if dead.load(Ordering::Acquire) {
+            let _ = fil.join();
+        }
+        return Err(e);
+    }
+
+    let flux = make_flux();
+    *prochaine.lock().unwrap_or_else(|e| e.into_inner()) = Some(flux);
+    *garde = Some(Moteur { format, sortie, prochaine, arret, dead: dead.clone(), fil });
+    Ok(dead)
 }
 
 /// Backend WASAPI exclusive pour la voie Symphonia (LiveDecode + FullBuffer).
@@ -84,6 +136,8 @@ pub struct WasapiExclusiveOutput {
     atomics: PlaybackAtomics,
     /// Levé par le moteur au premier tampon de cette piste.
     stream_ready: Arc<AtomicBool>,
+    /// Levé si le moteur exclusif s'est terminé.
+    engine_dead: Arc<AtomicBool>,
     /// Fin de cette piste pour le moteur.
     fin: Arc<AtomicBool>,
 }
@@ -126,8 +180,9 @@ impl WasapiExclusiveOutput {
 
         let stream_ready = Arc::new(AtomicBool::new(false));
         let fin = Arc::new(AtomicBool::new(false));
-        hand_over(format, preferred_device_name, FluxPiste {
-            source: Box::new(consumer),
+        let mut consumer_opt = Some(consumer);
+        let engine_dead = match attach_or_start_engine(format, preferred_device_name, || FluxPiste {
+            source: Box::new(consumer_opt.take().expect("consumer moved once")),
             is_paused: atomics.is_paused.clone(),
             is_stopped: atomics.is_stopped.clone(),
             fin: fin.clone(),
@@ -143,9 +198,18 @@ impl WasapiExclusiveOutput {
                 output_channels: shared.output_channels,
             },
             stream_ready: stream_ready.clone(),
-        });
+        }) {
+            Ok(d) => d,
+            Err(e) => {
+                let consumer = consumer_opt.take().expect("consumer unconsumed on init error");
+                return Err(WasapiBuildError {
+                    consumer,
+                    error: AudioOutputError::StartFailed(e),
+                });
+            }
+        };
 
-        Ok(Self { format, device_name, atomics, stream_ready, fin })
+        Ok(Self { format, device_name, atomics, stream_ready, engine_dead, fin })
     }
 }
 
@@ -157,9 +221,16 @@ impl AudioOutput for WasapiExclusiveOutput {
             if self.atomics.is_stopped.load(Ordering::Relaxed) {
                 return Ok(());
             }
+            if self.engine_dead.load(Ordering::Acquire) {
+                return Err(AudioOutputError::StartFailed(
+                    "le moteur WASAPI exclusive s'est arrêté avant le premier tampon".into(),
+                ));
+            }
             if began.elapsed() >= READY_TIMEOUT {
-                log::warn!("WASAPI exclusive : aucun tampon écrit après {} s, on continue sans attendre", READY_TIMEOUT.as_secs());
-                return Ok(());
+                return Err(AudioOutputError::StartFailed(format!(
+                    "WASAPI exclusive : aucun tampon écrit après {} s",
+                    READY_TIMEOUT.as_secs()
+                )));
             }
             std::thread::sleep(Duration::from_millis(2));
         }

@@ -186,4 +186,19 @@ mod tests {
         assert_eq!(dop_silence_payload() as u32, 0x00696900);
         assert_eq!(stamp_marker(dop_silence_payload(), false) as u32, 0x05696900);
     }
+
+    #[test]
+    fn reversed_dff_blocks_encode_identical_to_msb_first_with_lsb_first_true() {
+        // DffDecoder::read_next_blocks reverses raw MSB-first bytes into LSB-first.
+        let msb_hi = 0xAAu8;
+        let msb_lo = 0x12u8;
+        let dff_decoder_output = vec![
+            vec![msb_hi.reverse_bits(), msb_lo.reverse_bits()],
+            vec![0x55u8.reverse_bits(), 0x34u8.reverse_bits()],
+        ];
+        let mut enc = DopEncoder::new(2, true);
+        let out = enc.encode_blocks(&dff_decoder_output);
+        assert_eq!(out[0] as u32, 0x00AA1200);
+        assert_eq!(out[1] as u32, 0x00553400);
+    }
 }

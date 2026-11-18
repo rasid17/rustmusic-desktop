@@ -69,7 +69,7 @@ pub async fn apply_server_playlists(pool: &SqlitePool, server_id: i64, server: &
 }
 
 async fn upsert_local(pool: &SqlitePool, profil_id: i64, server_id: i64, p: &RemotePlaylist) -> Result<(), sqlx::Error> {
-    let mut tx = pool.begin().await?;
+    let mut tx = pool.begin_with("BEGIN IMMEDIATE").await?;
     let existing: Option<i64> = sqlx::query_scalar("SELECT id FROM playlists WHERE server_id = ? AND remote_id = ?")
         .bind(server_id)
         .bind(&p.id)

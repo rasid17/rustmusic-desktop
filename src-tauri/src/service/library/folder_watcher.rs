@@ -6,7 +6,7 @@ use tauri::Emitter;
 use crate::repository::library::library_dirs_repository::LibraryDirRepository;
 
 const AUDIO_EXTENSIONS: &[&str] = &[
-    "mp3", "flac", "wav", "ogg", "opus", "m4a", "aac", "alac", "wv", "ape", "dsf", "dff", "aiff", "aif", "wma",
+    "mp3", "flac", "wav", "ogg", "opus", "m4a", "aac", "alac", "wv", "ape", "dsf", "dff", "aiff", "aif", "wma", "cue",
 ];
 
 fn is_audio_file(path: &Path) -> bool {
@@ -89,6 +89,11 @@ pub fn start_folder_watcher(app: tauri::AppHandle, pool: sqlx::SqlitePool) {
 
             for dir in watched_dirs {
                 let dir_path_buf = PathBuf::from(&dir.path);
+                if !dir_path_buf.exists() {
+                    pending_changes.remove(&dir.id);
+                    log::debug!("Folder watcher: skipping missing directory {}", dir.path);
+                    continue;
+                }
                 let current_snapshot = match tokio::task::spawn_blocking(move || {
                     compute_dir_snapshot(&dir_path_buf)
                 })
@@ -108,6 +113,16 @@ pub fn start_folder_watcher(app: tauri::AppHandle, pool: sqlx::SqlitePool) {
                         continue;
                     }
                 };
+
+                if last.file_count >= 1 && current_snapshot.file_count == 0 {
+                    pending_changes.remove(&dir.id);
+                    log::warn!(
+                        "Folder watcher: directory {} dropped from {} files to 0; skipping sync to avoid accidental library wipe",
+                        dir.path,
+                        last.file_count
+                    );
+                    continue;
+                }
 
                 if &current_snapshot != last {
                     if pending_changes.get(&dir.id) == Some(&current_snapshot) {

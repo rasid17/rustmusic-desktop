@@ -22,7 +22,28 @@ fn split_path(chemin: &str) -> (&str, &str) {
 
 /// Le dossier de l'album pour le fichier donné. Vide si le chemin n'en a pas.
 pub fn album_root(chemin: &str) -> String {
-    let (dossier, _) = split_path(chemin);
+    let resolved_cue;
+    let effective = if let Some(cue) = crate::core::cue::parse_cue_uri(chemin) {
+        let p = if cue.real_path.parent().is_some_and(|d| !d.as_os_str().is_empty()) {
+            Some(cue.real_path)
+        } else {
+            cue.cue_path
+        };
+        if let Some(p) = p {
+            resolved_cue = p.to_string_lossy().into_owned();
+            resolved_cue.as_str()
+        } else if let Some(rest) = chemin.strip_prefix("cue://") {
+            rest.rsplit_once('#').map_or(rest, |(prefix, _)| prefix)
+        } else {
+            chemin
+        }
+    } else if let Some(rest) = chemin.strip_prefix("cue://") {
+        rest.rsplit_once('#').map_or(rest, |(prefix, _)| prefix)
+    } else {
+        chemin
+    };
+
+    let (dossier, _) = split_path(effective);
     if dossier.is_empty() {
         return String::new();
     }
@@ -88,5 +109,29 @@ mod tests {
     fn a_disc_at_the_root_stays_where_it_is() {
         // Remonter donnerait une chaîne vide : on préfère garder le dossier.
         assert_eq!(album_root(r"CD1\01.flac"), "CD1");
+    }
+
+    #[test]
+    fn cue_uris_unwrap_to_physical_album_folder() {
+        assert_eq!(
+            album_root("/home/user/Music/Album/disc.cue#01"),
+            "/home/user/Music/Album"
+        );
+        assert_eq!(
+            album_root("cue:///home/user/Music/Album/disc.cue#02"),
+            "/home/user/Music/Album"
+        );
+        assert_eq!(
+            album_root("cue:///home/user/Music/BoxSet/CD2/disc.cue#03"),
+            "/home/user/Music/BoxSet"
+        );
+        assert_eq!(
+            album_root(r"cue://D:\Music\BoxSet\Disc 1\album.cue#01"),
+            r"D:\Music\BoxSet"
+        );
+        assert_eq!(
+            album_root("cue:///home/user/Music/BoxSet/CD2/disc.flac#track=2&start=60.000&end=120.000&cue=/home/user/Music/BoxSet/CD2/disc.cue"),
+            "/home/user/Music/BoxSet"
+        );
     }
 }

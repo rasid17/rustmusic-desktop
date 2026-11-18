@@ -62,12 +62,13 @@
 
   const activeLibraryId = $derived(libraryId ?? $libraryStore.librarySelected?.id ?? null);
 
-  const SUGGESTIONS = [
-    "Chill Pop & Indie without orchestral or classical music",
-    "Upbeat energetic tracks for deep focus",
-    "Acoustic & warm vocals for late night listening",
-    "Rarely played hidden gems with a cohesive vibe",
-  ];
+  const SUGGESTION_KEYS = [
+    "ai_playlist.suggestion_1",
+    "ai_playlist.suggestion_2",
+    "ai_playlist.suggestion_3",
+    "ai_playlist.suggestion_4",
+  ] as const;
+  const SUGGESTIONS = $derived(SUGGESTION_KEYS.map((k) => $t(k)));
 
   onMount(async () => {
     if (initialPrompt && !prompt) prompt = initialPrompt;
@@ -104,12 +105,12 @@
   async function submit() {
     errorText = null;
     if (!prompt.trim()) {
-      errorText = "Please describe the mood, genre, or instructions for your playlist.";
+      errorText = $t("ai_playlist.error_empty_prompt");
       return;
     }
     const profilId = $profilSelector.profilSelected?.id;
     if (!profilId) {
-      errorText = "No active profile found.";
+      errorText = $t("common.no_profile");
       return;
     }
 
@@ -133,7 +134,7 @@
       toasts.push({
         type: "success",
         title: res.playlist.name,
-        message: `${res.track_count} tracks curated by ${res.agent_used}`,
+        message: $t("ai_playlist.toast_created").replace("{n}", String(res.track_count)).replace("{agent}", res.agent_used),
       });
       popinStore.close();
       goto(`/playlist/${res.playlist.id}`);
@@ -155,20 +156,20 @@
     </span>
     <div class="min-w-0 flex-1">
       <p class="text-[15px] font-bold truncate text-(--rg-tx)">
-        {playlistName.trim() || "AI Curated Playlist"}
+        {playlistName.trim() || $t("ai_playlist.preview_default")}
       </p>
       <p class="mt-0.5 text-xs text-(--rg-mu) truncate">
-        {selectedAgent ? selectedAgent.name : "CLI Agent"} · {maxTracks} tracks max
+        {$t("ai_playlist.summary_meta").replace("{agent}", selectedAgent ? selectedAgent.name : $t("ai_playlist.cli_agent_default")).replace("{n}", String(maxTracks))}
       </p>
     </div>
   </div>
 
   <!-- Choix de l'agent IA -->
-  <FormField label="AI Agent (CLI)" for="ai_agent">
+  <FormField label={$t("ai_playlist.agent_label")} for="ai_agent">
     {#if loadingAgents}
       <div class="flex items-center gap-2 text-xs text-(--rg-mu) py-1">
         <Icon icon="lucide:loader-2" width="15" class="animate-spin" />
-        Detecting CLI agents on system...
+        {$t("ai_playlist.detecting")}
       </div>
     {:else}
       <div id="ai_agent" class="flex flex-wrap gap-2">
@@ -199,13 +200,13 @@
 
   {#if selectedAgentId === "custom" || selectedAgentId === "ollama"}
     <FormField
-      label={selectedAgentId === "ollama" ? "Ollama Model" : "Custom CLI Command (receives prompt via stdin)"}
+      label={selectedAgentId === "ollama" ? $t("ai_playlist.ollama_model") : $t("ai_playlist.custom_cmd_label")}
       for="ai_custom_cmd"
     >
       <FormInput
         id="ai_custom_cmd"
         bind:value={customCommand}
-        placeholder={selectedAgentId === "ollama" ? "llama3.2" : "agy -p / claude -p / gemini -p"}
+        placeholder={selectedAgentId === "ollama" ? "llama3.2" : $t("ai_playlist.custom_cmd_placeholder")}
         disabled={isGenerating}
       />
     </FormField>
@@ -213,7 +214,7 @@
 
   <!-- Prompt utilisateur -->
   <FormField
-    label="Playlist Prompt / Mood"
+    label={$t("ai_playlist.prompt_label")}
     for="ai_prompt"
     required
     error={errorText ?? ""}
@@ -222,7 +223,7 @@
       id="ai_prompt"
       multiline
       bind:value={prompt}
-      placeholder="Example: Chill pop & synthpop tracks for late night listening, exclude orchestral or classical pieces..."
+      placeholder={$t("ai_playlist.prompt_placeholder")}
       invalid={!!errorText}
       disabled={isGenerating}
       oninput={() => (errorText = null)}
@@ -250,12 +251,12 @@
       <FormInput
         id="ai_pl_name"
         bind:value={playlistName}
-        placeholder="Leave blank to let AI name it"
+        placeholder={$t("ai_playlist.name_placeholder")}
         disabled={isGenerating}
       />
     </FormField>
 
-    <FormField label="Track Count" for="ai_max_tracks">
+    <FormField label={$t("ai_playlist.track_count")} for="ai_max_tracks">
       <div id="ai_max_tracks" class="flex items-center gap-1.5 h-10">
         {#each [15, 25, 40, 60] as count}
           <button
@@ -316,7 +317,7 @@
   cancelLabel={$t("common.cancel")}
   oncancel={close}
   cancelDisabled={isGenerating}
-  submitLabel={isGenerating ? "AI is curating..." : "Generate Playlist"}
+  submitLabel={isGenerating ? $t("ai_playlist.curating") : $t("ai_playlist.generate")}
   submitIcon="material-symbols:auto-awesome-rounded"
   onsubmit={submit}
   busy={isGenerating}

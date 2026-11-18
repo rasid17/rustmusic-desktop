@@ -224,7 +224,7 @@ async function handleRemoteCmd(payload: RemoteCmdPayload) {
         break;
       case "play-track":
         if (payload.path) {
-          let contextPaths =
+          const contextPaths =
             Array.isArray(payload.paths) && payload.paths.length > 1
               ? payload.paths
               : [];
@@ -233,8 +233,15 @@ async function handleRemoteCmd(payload: RemoteCmdPayload) {
               ? await resolveTracksByPaths(contextPaths)
               : await resolveTracksByPaths([payload.path]);
 
+          const existingQueueTrack = get(queueState).tracks.find((t) => t.path === payload.path);
+          const targetInViews = views.some((v) => v.path === payload.path);
+          if (!targetInViews && !existingQueueTrack) {
+            console.warn("[mobile-remote] blocked unverified play-track path");
+            return;
+          }
+
           // If only 1 track was in the list (e.g. single search result), load a broader library queue context
-          if (views.length <= 1) {
+          if (targetInViews && views.length <= 1) {
             try {
               const page = await invoke<{ tracks: TrackListView[] }>("get_tracks_paginated", {
                 libraryId: defaultLibId,
@@ -257,10 +264,10 @@ async function handleRemoteCmd(payload: RemoteCmdPayload) {
             }
           }
 
-          if (views.length > 0) {
+          if (views.length > 0 && targetInViews) {
             await handlePlayTrack(payload.path, toQueue(views));
-          } else {
-            await handlePlayTrack(payload.path);
+          } else if (existingQueueTrack) {
+            await handlePlayTrack(existingQueueTrack.path, get(queueState).tracks);
           }
           schedulePush(true);
         }
@@ -268,10 +275,14 @@ async function handleRemoteCmd(payload: RemoteCmdPayload) {
       case "play-next":
         if (payload.path) {
           const views = await resolveTracksByPaths([payload.path]);
+          const existingQueueTrack = get(queueState).tracks.find((t) => t.path === payload.path);
           if (views.length > 0) {
             await queueState.addTrack(toQueueTrack(views[0]));
+          } else if (existingQueueTrack) {
+            await queueState.addTrack(existingQueueTrack);
           } else {
-            await queueState.addTrack(toQueueTrack({ path: payload.path, title: payload.path.split(/[\\/]/).pop() }));
+            console.warn("[mobile-remote] blocked unverified play-next path");
+            return;
           }
           schedulePush(true);
         }
@@ -279,10 +290,14 @@ async function handleRemoteCmd(payload: RemoteCmdPayload) {
       case "enqueue-track":
         if (payload.path) {
           const views = await resolveTracksByPaths([payload.path]);
+          const existingQueueTrack = get(queueState).tracks.find((t) => t.path === payload.path);
           if (views.length > 0) {
             await queueState.enqueue(toQueueTrack(views[0]));
+          } else if (existingQueueTrack) {
+            await queueState.enqueue(existingQueueTrack);
           } else {
-            await queueState.enqueue(toQueueTrack({ path: payload.path, title: payload.path.split(/[\\/]/).pop() }));
+            console.warn("[mobile-remote] blocked unverified enqueue-track path");
+            return;
           }
           schedulePush(true);
         }

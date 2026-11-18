@@ -43,6 +43,10 @@ export const libraryStore = {
 
     if (!profilId) {
         console.warn("No profil selected, skip library init");
+        libraryWriter.update(state => ({
+          ...state,
+          isLoading: false
+        }));
         return;
     }
 

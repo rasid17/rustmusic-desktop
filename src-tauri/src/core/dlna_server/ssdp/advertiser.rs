@@ -87,12 +87,14 @@ pub async fn run_advertiser(
 fn open(ip: Ipv4Addr) -> std::io::Result<UdpSocket> {
     let std_sock = std::net::UdpSocket::bind(SocketAddr::new(IpAddr::V4(ip), 0))?;
     std_sock.set_nonblocking(true)?;
-    // Bump multicast TTL to 4 (default is 1) so packets traverse a few hops
-    // if routers/switches reduce TTL on the way.
-    if let Err(e) = std_sock.set_multicast_ttl_v4(4) {
+    let sock2 = socket2::Socket::from(std_sock);
+    if let Err(e) = sock2.set_multicast_if_v4(&ip) {
+        log::debug!("set_multicast_if_v4({ip}) failed: {e}");
+    }
+    if let Err(e) = sock2.set_multicast_ttl_v4(4) {
         log::warn!("set_multicast_ttl_v4 failed: {}", e);
     }
-    UdpSocket::from_std(std_sock)
+    UdpSocket::from_std(sock2.into())
 }
 
 // ─── Message senders ─────────────────────────────────────────────────

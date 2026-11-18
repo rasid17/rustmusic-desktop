@@ -60,7 +60,7 @@ impl QueueStateRepository {
     {
 
         // On lance une transaction
-        let mut tx: sqlx::Transaction<'_, sqlx::Sqlite> = pool.begin().await?;
+        let mut tx: sqlx::Transaction<'_, sqlx::Sqlite> = pool.begin_with("BEGIN IMMEDIATE").await?;
 
         // 1. On remet l'état à zéro
         sqlx::query("UPDATE queue_state SET current_index = -1 WHERE profil_id = ?")

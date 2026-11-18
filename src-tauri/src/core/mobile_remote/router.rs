@@ -1,6 +1,7 @@
 //! Axum HTTP router for the Mobile Remote Web App / PWA.
 
-use std::path::PathBuf;
+use std::io::Read;
+use std::path::{Path as StdPath, PathBuf};
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::time::Duration;
@@ -13,15 +14,17 @@ use axum::routing::{get, post};
 use axum::{Json, Router};
 use serde::{Deserialize, Serialize};
 use sqlx::SqlitePool;
-use tauri::Emitter;
+use tauri::{Emitter, Manager};
 use tower::ServiceExt;
 use tower_http::services::ServeFile;
 
-use crate::core::mobile_remote::state::{MobileRemoteSharedState, RemoteCmdPayload};
+use crate::core::mobile_remote::state::{AuthOutcome, MobileRemoteSharedState, RemoteCmdPayload};
 use crate::repository::library::library_files_repository::LibraryFilesRepository;
 use crate::repository::library::library_track_repository::LibraryTrackRepository;
 use crate::repository::playlist::playlist_item_repository::PlaylistItemRepository;
 use crate::repository::playlist::playlist_repository::PlaylistRepository;
+
+const SESSION_COOKIE_NAME: &str = "rm_remote_session";
 
 const UI_HTML: &str = include_str!("ui.html");
 
@@ -149,34 +152,130 @@ fn extract_pin<'a>(headers: &'a HeaderMap, query_pin: Option<&'a str>) -> Option
         .or(query_pin)
 }
 
+fn extract_cookie<'a>(headers: &'a HeaderMap, name: &str) -> Option<&'a str> {
+    let raw = headers.get(header::COOKIE)?.to_str().ok()?;
+    for part in raw.split(';') {
+        let trimmed = part.trim();
+        if let Some((k, v)) = trimmed.split_once('=') {
+            if k.trim() == name {
+                let val = v.trim();
+                if !val.is_empty() {
+                    return Some(val);
+                }
+            }
+        }
+    }
+    None
+}
+
+fn with_session_cookie(mut resp: Response, set_cookie: Option<String>) -> Response {
+    if let Some(cookie) = set_cookie {
+        if let Ok(val) = HeaderValue::from_str(&cookie) {
+            resp.headers_mut().append(header::SET_COOKIE, val);
+        }
+    }
+    resp
+}
+
+fn format_session_cookie(token: &str) -> String {
+    format!("{SESSION_COOKIE_NAME}={token}; HttpOnly; SameSite=Lax; Path=/")
+}
+
+fn escape_like(input: &str) -> String {
+    input
+        .replace('\\', "\\\\")
+        .replace('%', "\\%")
+        .replace('_', "\\_")
+}
+
+fn is_same_origin(headers: &HeaderMap) -> bool {
+    if let Some(fetch_site) = headers.get("sec-fetch-site").and_then(|v| v.to_str().ok()) {
+        if fetch_site.eq_ignore_ascii_case("cross-site") {
+            return false;
+        }
+    }
+    let Some(origin) = headers.get(header::ORIGIN).and_then(|v| v.to_str().ok()) else {
+        return true;
+    };
+    let Ok(origin_url) = reqwest::Url::parse(origin) else {
+        return false;
+    };
+    let Some(host_hdr) = headers.get(header::HOST).and_then(|v| v.to_str().ok()) else {
+        return false;
+    };
+    let Ok(host_url) = reqwest::Url::parse(&format!("http://{host_hdr}")) else {
+        return false;
+    };
+    let host_eq = origin_url
+        .host_str()
+        .zip(host_url.host_str())
+        .is_some_and(|(a, b)| a.eq_ignore_ascii_case(b));
+    let port_eq = origin_url.port() == host_url.port();
+    host_eq && port_eq
+}
+
 async fn authorize(
     state: &RouterState,
     headers: &HeaderMap,
     query_pin: Option<&str>,
-) -> Result<(), Response> {
+) -> Result<Option<String>, Response> {
     if let Some(cid) = headers.get("x-client-id").and_then(|v| v.to_str().ok()) {
         state.shared.touch_client(cid).await;
     }
+    let cookie_token = extract_cookie(headers, SESSION_COOKIE_NAME);
     let pin = extract_pin(headers, query_pin);
-    if !state.shared.check_pin(pin).await {
-        return Err((
+    match state.shared.authorize_request(cookie_token, pin).await {
+        AuthOutcome::AllowedNoPin | AuthOutcome::CookieValid => Ok(None),
+        AuthOutcome::PinValid => {
+            let token = state.shared.issue_session_token().await;
+            Ok(Some(format_session_cookie(&token)))
+        }
+        AuthOutcome::RateLimited => Err((
+            StatusCode::TOO_MANY_REQUESTS,
+            Json(serde_json::json!({
+                "error": "Too many failed PIN attempts. Wait 30 seconds.",
+                "pin_required": true,
+                "rate_limited": true
+            })),
+        )
+            .into_response()),
+        AuthOutcome::Unauthorized => Err((
             StatusCode::UNAUTHORIZED,
             Json(serde_json::json!({ "error": "PIN required or invalid", "pin_required": true })),
         )
-            .into_response());
+            .into_response()),
     }
-    Ok(())
 }
 
-async fn serve_ui() -> Response {
-    (
+async fn serve_ui(
+    State(state): State<RouterState>,
+    headers: HeaderMap,
+    Query(q): Query<AuthQuery>,
+) -> Response {
+    let set_cookie = match state
+        .shared
+        .authorize_request(
+            extract_cookie(&headers, SESSION_COOKIE_NAME),
+            q.pin.as_deref(),
+        )
+        .await
+    {
+        AuthOutcome::PinValid => {
+            let token = state.shared.issue_session_token().await;
+            Some(format_session_cookie(&token))
+        }
+        _ => None,
+    };
+
+    let resp = (
         [
             (header::CONTENT_TYPE, "text/html; charset=utf-8"),
             (header::CACHE_CONTROL, "no-cache"),
         ],
         UI_HTML,
     )
-        .into_response()
+        .into_response();
+    with_session_cookie(resp, set_cookie)
 }
 
 async fn serve_manifest() -> Response {
@@ -196,13 +295,26 @@ async fn check_auth(
         state.shared.touch_client(cid).await;
     }
     let pin_required = state.shared.pin_enabled.load(Ordering::Relaxed);
+    let cookie_token = extract_cookie(&headers, SESSION_COOKIE_NAME);
     let pin = extract_pin(&headers, q.pin.as_deref());
-    let authorized = state.shared.check_pin(pin).await;
-    Json(serde_json::json!({
+    let outcome = state.shared.authorize_request(cookie_token, pin).await;
+    let set_cookie = if outcome == AuthOutcome::PinValid {
+        let token = state.shared.issue_session_token().await;
+        Some(format_session_cookie(&token))
+    } else {
+        None
+    };
+    let authorized = matches!(
+        outcome,
+        AuthOutcome::AllowedNoPin | AuthOutcome::CookieValid | AuthOutcome::PinValid
+    );
+    let resp = Json(serde_json::json!({
         "pin_required": pin_required,
-        "authorized": authorized
+        "authorized": authorized,
+        "rate_limited": outcome == AuthOutcome::RateLimited
     }))
-    .into_response()
+    .into_response();
+    with_session_cookie(resp, set_cookie)
 }
 
 async fn get_state(
@@ -210,11 +322,12 @@ async fn get_state(
     headers: HeaderMap,
     Query(q): Query<AuthQuery>,
 ) -> Response {
-    if let Err(resp) = authorize(&state, &headers, q.pin.as_deref()).await {
-        return resp;
-    }
+    let cookie = match authorize(&state, &headers, q.pin.as_deref()).await {
+        Ok(c) => c,
+        Err(resp) => return resp,
+    };
     let snap = state.shared.snapshot().await;
-    Json(snap).into_response()
+    with_session_cookie(Json(snap).into_response(), cookie)
 }
 
 async fn poll_state(
@@ -222,22 +335,43 @@ async fn poll_state(
     headers: HeaderMap,
     Query(q): Query<PollQuery>,
 ) -> Response {
-    if let Err(resp) = authorize(&state, &headers, q.pin.as_deref()).await {
-        return resp;
-    }
+    let cookie = match authorize(&state, &headers, q.pin.as_deref()).await {
+        Ok(c) => c,
+        Err(resp) => return resp,
+    };
 
     let since = q.since.unwrap_or(0);
     {
         let current = state.shared.player.read().await;
         if since == 0 || (current.updated_at_ms != 0 && current.updated_at_ms != since) {
-            return Json(current.clone()).into_response();
+            return with_session_cookie(Json(current.clone()).into_response(), cookie);
         }
     }
 
     let mut rx = state.shared.state_tx.subscribe();
     let _ = tokio::time::timeout(Duration::from_secs(15), rx.recv()).await;
     let snap = state.shared.snapshot().await;
-    Json(snap).into_response()
+    with_session_cookie(Json(snap).into_response(), cookie)
+}
+
+async fn is_known_playable_path(
+    pool: &SqlitePool,
+    shared: &MobileRemoteSharedState,
+    path: &str,
+) -> bool {
+    if LibraryFilesRepository::find_id_by_path(pool, path)
+        .await
+        .ok()
+        .flatten()
+        .is_some()
+    {
+        return true;
+    }
+    let snap = shared.snapshot().await;
+    if snap.path.as_deref() == Some(path) {
+        return true;
+    }
+    snap.queue.iter().any(|item| item.path == path)
 }
 
 async fn post_cmd(
@@ -246,8 +380,40 @@ async fn post_cmd(
     Query(q): Query<AuthQuery>,
     Json(mut payload): Json<RemoteCmdPayload>,
 ) -> Response {
-    if let Err(resp) = authorize(&state, &headers, q.pin.as_deref()).await {
-        return resp;
+    let cookie = match authorize(&state, &headers, q.pin.as_deref()).await {
+        Ok(c) => c,
+        Err(resp) => return resp,
+    };
+    if !is_same_origin(&headers) {
+        return (
+            StatusCode::FORBIDDEN,
+            Json(serde_json::json!({ "error": "Cross-origin command denied" })),
+        )
+            .into_response();
+    }
+
+    if matches!(
+        payload.cmd.as_str(),
+        "play-track" | "play-next" | "enqueue-track" | "toggle-like"
+    ) {
+        if let Some(ref p) = payload.path {
+            if !is_known_playable_path(&state.pool, &state.shared, p).await {
+                return (
+                    StatusCode::NOT_FOUND,
+                    Json(serde_json::json!({ "error": "Track path not found in library or active queue" })),
+                )
+                    .into_response();
+            }
+        }
+        if let Some(ref mut list) = payload.paths {
+            let mut verified = Vec::with_capacity(list.len());
+            for p in list.iter() {
+                if is_known_playable_path(&state.pool, &state.shared, p).await {
+                    verified.push(p.clone());
+                }
+            }
+            *list = verified;
+        }
     }
 
     if payload.cmd == "add-to-playlist" {
@@ -309,7 +475,7 @@ async fn post_cmd(
     }
 
     let _ = state.app_handle.emit("mobile-remote-cmd", &payload);
-    Json(serde_json::json!({ "ok": true })).into_response()
+    with_session_cookie(Json(serde_json::json!({ "ok": true })).into_response(), cookie)
 }
 
 pub async fn query_tracks(
@@ -319,7 +485,7 @@ pub async fn query_tracks(
     limit: i64,
     offset: i64,
 ) -> (Vec<RemoteTrackRow>, i64) {
-    let search_lower = search.trim().to_lowercase();
+    let search_lower = escape_like(&search.trim().to_lowercase());
     let pattern = format!("%{search_lower}%");
     let has_search = !search_lower.is_empty();
 
@@ -339,9 +505,9 @@ pub async fn query_tracks(
         LEFT JOIN library_cache lc ON lc.id = lt.cache_id
         LEFT JOIN library_albums la ON la.id = lt.library_album_id
         LEFT JOIN artists a ON a.id = lt.artist_id
-        WHERE (?1 = 0 OR LOWER(COALESCE(lt.title, '')) LIKE ?2
-               OR LOWER(COALESCE(a.name, lc.artist, '')) LIKE ?2
-               OR LOWER(COALESCE(la.title, lc.album, '')) LIKE ?2)
+        WHERE (?1 = 0 OR LOWER(COALESCE(lt.title, '')) LIKE ?2 ESCAPE '\'
+               OR LOWER(COALESCE(a.name, lc.artist, '')) LIKE ?2 ESCAPE '\'
+               OR LOWER(COALESCE(la.title, lc.album, '')) LIKE ?2 ESCAPE '\')
         "#,
     )
     .bind(has_search as i64)
@@ -376,9 +542,9 @@ pub async fn query_tracks(
         LEFT JOIN library_cache lc ON lc.id = lt.cache_id
         LEFT JOIN library_albums la ON la.id = lt.library_album_id
         LEFT JOIN artists a ON a.id = lt.artist_id
-        WHERE (?1 = 0 OR LOWER(COALESCE(lt.title, '')) LIKE ?2
-               OR LOWER(COALESCE(a.name, lc.artist, '')) LIKE ?2
-               OR LOWER(COALESCE(la.title, lc.album, '')) LIKE ?2)
+        WHERE (?1 = 0 OR LOWER(COALESCE(lt.title, '')) LIKE ?2 ESCAPE '\'
+               OR LOWER(COALESCE(a.name, lc.artist, '')) LIKE ?2 ESCAPE '\'
+               OR LOWER(COALESCE(la.title, lc.album, '')) LIKE ?2 ESCAPE '\')
         ORDER BY {order_clause}
         LIMIT ?3 OFFSET ?4
         "#
@@ -407,22 +573,26 @@ async fn list_tracks(
     headers: HeaderMap,
     Query(q): Query<BrowseQuery>,
 ) -> Response {
-    if let Err(resp) = authorize(&state, &headers, q.pin.as_deref()).await {
-        return resp;
-    }
+    let cookie = match authorize(&state, &headers, q.pin.as_deref()).await {
+        Ok(c) => c,
+        Err(resp) => return resp,
+    };
 
     let search = q.q.unwrap_or_default();
     let limit = q.limit.unwrap_or(60).clamp(1, 200);
     let offset = q.offset.unwrap_or(0).max(0);
     let (tracks, total) = query_tracks(&state.pool, &search, q.sort.as_deref(), limit, offset).await;
 
-    Json(serde_json::json!({
-        "tracks": tracks,
-        "total": total,
-        "offset": offset,
-        "limit": limit
-    }))
-    .into_response()
+    with_session_cookie(
+        Json(serde_json::json!({
+            "tracks": tracks,
+            "total": total,
+            "offset": offset,
+            "limit": limit
+        }))
+        .into_response(),
+        cookie,
+    )
 }
 
 pub async fn query_albums(
@@ -431,7 +601,7 @@ pub async fn query_albums(
     limit: i64,
     offset: i64,
 ) -> Vec<RemoteAlbumRow> {
-    let search_lower = search.trim().to_lowercase();
+    let search_lower = escape_like(&search.trim().to_lowercase());
     let pattern = format!("%{search_lower}%");
     let has_search = !search_lower.is_empty();
 
@@ -451,7 +621,7 @@ pub async fn query_albums(
             AND NOT EXISTS (SELECT 1 FROM library_dirs ld WHERE ld.id = lf.library_dir_id AND ld.is_active = 0)
         LEFT JOIN library_cache lc ON lc.id = lt.cache_id
         LEFT JOIN artists a ON a.id = la.artist_id
-        WHERE (?1 = 0 OR LOWER(la.title) LIKE ?2 OR LOWER(COALESCE(a.name, '')) LIKE ?2)
+        WHERE (?1 = 0 OR LOWER(la.title) LIKE ?2 ESCAPE '\' OR LOWER(COALESCE(a.name, '')) LIKE ?2 ESCAPE '\')
         GROUP BY la.id
         HAVING COUNT(lt.id) > 0
         ORDER BY la.title COLLATE NOCASE ASC
@@ -478,21 +648,25 @@ async fn list_albums(
     headers: HeaderMap,
     Query(q): Query<BrowseQuery>,
 ) -> Response {
-    if let Err(resp) = authorize(&state, &headers, q.pin.as_deref()).await {
-        return resp;
-    }
+    let cookie = match authorize(&state, &headers, q.pin.as_deref()).await {
+        Ok(c) => c,
+        Err(resp) => return resp,
+    };
 
     let search = q.q.unwrap_or_default();
     let limit = q.limit.unwrap_or(60).clamp(1, 200);
     let offset = q.offset.unwrap_or(0).max(0);
     let albums = query_albums(&state.pool, &search, limit, offset).await;
 
-    Json(serde_json::json!({
-        "albums": albums,
-        "offset": offset,
-        "limit": limit
-    }))
-    .into_response()
+    with_session_cookie(
+        Json(serde_json::json!({
+            "albums": albums,
+            "offset": offset,
+            "limit": limit
+        }))
+        .into_response(),
+        cookie,
+    )
 }
 
 async fn get_album_detail(
@@ -501,9 +675,10 @@ async fn get_album_detail(
     headers: HeaderMap,
     Query(q): Query<AuthQuery>,
 ) -> Response {
-    if let Err(resp) = authorize(&state, &headers, q.pin.as_deref()).await {
-        return resp;
-    }
+    let cookie = match authorize(&state, &headers, q.pin.as_deref()).await {
+        Ok(c) => c,
+        Err(resp) => return resp,
+    };
 
     let album: Option<RemoteAlbumRow> = sqlx::query_as::<_, RemoteAlbumRow>(
         r#"
@@ -567,11 +742,14 @@ async fn get_album_detail(
     .await
     .unwrap_or_default();
 
-    Json(serde_json::json!({
-        "album": album,
-        "tracks": tracks
-    }))
-    .into_response()
+    with_session_cookie(
+        Json(serde_json::json!({
+            "album": album,
+            "tracks": tracks
+        }))
+        .into_response(),
+        cookie,
+    )
 }
 
 pub async fn query_artists(
@@ -580,7 +758,7 @@ pub async fn query_artists(
     limit: i64,
     offset: i64,
 ) -> Vec<RemoteArtistRow> {
-    let search_lower = search.trim().to_lowercase();
+    let search_lower = escape_like(&search.trim().to_lowercase());
     let pattern = format!("%{search_lower}%");
     let has_search = !search_lower.is_empty();
 
@@ -597,7 +775,7 @@ pub async fn query_artists(
         INNER JOIN library_files lf ON lf.id = lt.file_id
             AND NOT EXISTS (SELECT 1 FROM library_dirs ld WHERE ld.id = lf.library_dir_id AND ld.is_active = 0)
         LEFT JOIN library_cache lc ON lc.id = lt.cache_id
-        WHERE (?1 = 0 OR LOWER(a.name) LIKE ?2)
+        WHERE (?1 = 0 OR LOWER(a.name) LIKE ?2 ESCAPE '\')
         GROUP BY a.id
         HAVING COUNT(lt.id) > 0
         ORDER BY a.name COLLATE NOCASE ASC
@@ -624,21 +802,25 @@ async fn list_artists(
     headers: HeaderMap,
     Query(q): Query<BrowseQuery>,
 ) -> Response {
-    if let Err(resp) = authorize(&state, &headers, q.pin.as_deref()).await {
-        return resp;
-    }
+    let cookie = match authorize(&state, &headers, q.pin.as_deref()).await {
+        Ok(c) => c,
+        Err(resp) => return resp,
+    };
 
     let search = q.q.unwrap_or_default();
     let limit = q.limit.unwrap_or(60).clamp(1, 200);
     let offset = q.offset.unwrap_or(0).max(0);
     let artists = query_artists(&state.pool, &search, limit, offset).await;
 
-    Json(serde_json::json!({
-        "artists": artists,
-        "offset": offset,
-        "limit": limit
-    }))
-    .into_response()
+    with_session_cookie(
+        Json(serde_json::json!({
+            "artists": artists,
+            "offset": offset,
+            "limit": limit
+        }))
+        .into_response(),
+        cookie,
+    )
 }
 
 async fn get_artist_detail(
@@ -647,9 +829,10 @@ async fn get_artist_detail(
     headers: HeaderMap,
     Query(q): Query<AuthQuery>,
 ) -> Response {
-    if let Err(resp) = authorize(&state, &headers, q.pin.as_deref()).await {
-        return resp;
-    }
+    let cookie = match authorize(&state, &headers, q.pin.as_deref()).await {
+        Ok(c) => c,
+        Err(resp) => return resp,
+    };
 
     let artist_name: String = sqlx::query_scalar("SELECT name FROM artists WHERE id = ?1")
         .bind(&artist_id)
@@ -724,12 +907,15 @@ async fn get_artist_detail(
     .await
     .unwrap_or_default();
 
-    Json(serde_json::json!({
-        "artist": { "id": artist_id, "name": artist_name },
-        "albums": albums,
-        "tracks": tracks
-    }))
-    .into_response()
+    with_session_cookie(
+        Json(serde_json::json!({
+            "artist": { "id": artist_id, "name": artist_name },
+            "albums": albums,
+            "tracks": tracks
+        }))
+        .into_response(),
+        cookie,
+    )
 }
 
 pub async fn query_playlists(pool: &SqlitePool) -> Vec<RemotePlaylistRow> {
@@ -819,12 +1005,13 @@ async fn list_playlists(
     headers: HeaderMap,
     Query(q): Query<AuthQuery>,
 ) -> Response {
-    if let Err(resp) = authorize(&state, &headers, q.pin.as_deref()).await {
-        return resp;
-    }
+    let cookie = match authorize(&state, &headers, q.pin.as_deref()).await {
+        Ok(c) => c,
+        Err(resp) => return resp,
+    };
 
     let result = query_playlists(&state.pool).await;
-    Json(serde_json::json!({ "playlists": result })).into_response()
+    with_session_cookie(Json(serde_json::json!({ "playlists": result })).into_response(), cookie)
 }
 
 async fn get_playlist_detail(
@@ -833,9 +1020,16 @@ async fn get_playlist_detail(
     headers: HeaderMap,
     Query(q): Query<AuthQuery>,
 ) -> Response {
-    if let Err(resp) = authorize(&state, &headers, q.pin.as_deref()).await {
-        return resp;
-    }
+    let cookie = match authorize(&state, &headers, q.pin.as_deref()).await {
+        Ok(c) => c,
+        Err(resp) => return resp,
+    };
+
+    let resp = build_playlist_detail_response(&state, &playlist_id).await;
+    with_session_cookie(resp, cookie)
+}
+
+async fn build_playlist_detail_response(state: &RouterState, playlist_id: &str) -> Response {
 
     if playlist_id == "liked" {
         let tracks: Vec<RemoteTrackRow> = sqlx::query_as::<_, RemoteTrackRow>(
@@ -1061,51 +1255,196 @@ async fn get_playlist_detail(
     .into_response()
 }
 
+pub(crate) fn is_allowed_cover_extension(path: &StdPath) -> bool {
+    let Some(ext) = path.extension().and_then(|e| e.to_str()) else {
+        return false;
+    };
+    matches!(
+        ext.to_ascii_lowercase().as_str(),
+        "jpg" | "jpeg" | "png" | "webp" | "gif" | "avif" | "bmp"
+    )
+}
+
+pub(crate) fn sniff_image_mime_bytes(bytes: &[u8]) -> Option<&'static str> {
+    if bytes.starts_with(&[0xFF, 0xD8, 0xFF]) {
+        Some("image/jpeg")
+    } else if bytes.starts_with(b"\x89PNG\r\n\x1a\n") {
+        Some("image/png")
+    } else if bytes.len() >= 12 && bytes.starts_with(b"RIFF") && &bytes[8..12] == b"WEBP" {
+        Some("image/webp")
+    } else if bytes.starts_with(b"GIF87a") || bytes.starts_with(b"GIF89a") {
+        Some("image/gif")
+    } else if bytes.starts_with(b"BM") {
+        Some("image/bmp")
+    } else if bytes.len() >= 12
+        && &bytes[4..8] == b"ftyp"
+        && (&bytes[8..12] == b"avif" || &bytes[8..12] == b"avis")
+    {
+        Some("image/avif")
+    } else {
+        None
+    }
+}
+
+fn sniff_image_file(path: &StdPath) -> Option<&'static str> {
+    let mut f = std::fs::File::open(path).ok()?;
+    let mut header_buf = [0u8; 16];
+    let n = f.read(&mut header_buf).ok()?;
+    sniff_image_mime_bytes(&header_buf[..n])
+}
+
+fn is_trusted_cover_host(host: &str) -> bool {
+    let h = host.trim().to_ascii_lowercase();
+    let allowed_suffixes = [
+        "qobuz.com",
+        "tidal.com",
+        "mzstatic.com",
+        "dzcdn.net",
+        "coverartarchive.org",
+        "archive.org",
+    ];
+    allowed_suffixes
+        .iter()
+        .any(|domain| h == *domain || h.ends_with(&format!(".{domain}")))
+}
+
+pub(crate) async fn is_known_cover_in_db(pool: &SqlitePool, value: &str) -> bool {
+    sqlx::query_scalar::<_, i64>(
+        r#"
+        SELECT 1 WHERE
+            EXISTS(SELECT 1 FROM library_cache WHERE thumbnail_path = ?1)
+            OR EXISTS(SELECT 1 FROM library_albums WHERE cover_url = ?1)
+            OR EXISTS(SELECT 1 FROM artists WHERE image_url = ?1)
+            OR EXISTS(SELECT 1 FROM podcasts WHERE cover_path = ?1 OR image_url = ?1)
+            OR EXISTS(SELECT 1 FROM playlists WHERE cover = ?1)
+        "#,
+    )
+    .bind(value)
+    .fetch_optional(pool)
+    .await
+    .ok()
+    .flatten()
+    .is_some()
+}
+
+pub(crate) fn allowed_cover_roots(app_handle: &tauri::AppHandle) -> Vec<PathBuf> {
+    let mut roots = Vec::new();
+    if let Ok(app_covers) = app_handle.path().resolve("covers", tauri::path::BaseDirectory::AppData) {
+        if let Ok(canon) = std::fs::canonicalize(&app_covers) {
+            roots.push(canon);
+        }
+    }
+    if let Some(data_dir) = dirs::data_dir() {
+        let legacy_covers = data_dir.join("com.larevuegeek.rustmusic").join("covers");
+        if let Ok(canon) = std::fs::canonicalize(&legacy_covers) {
+            if !roots.contains(&canon) {
+                roots.push(canon);
+            }
+        }
+    }
+    roots
+}
+
 async fn serve_cover(
     State(state): State<RouterState>,
     headers: HeaderMap,
     Query(q): Query<CoverQuery>,
     request: Request<Body>,
 ) -> Response {
-    if let Err(resp) = authorize(&state, &headers, q.pin.as_deref()).await {
-        return resp;
-    }
+    let cookie = match authorize(&state, &headers, q.pin.as_deref()).await {
+        Ok(c) => c,
+        Err(resp) => return resp,
+    };
 
     let Some(raw_path) = q.path.as_deref().map(str::trim).filter(|s| !s.is_empty()) else {
         return StatusCode::NOT_FOUND.into_response();
     };
 
     if raw_path.starts_with("http://") || raw_path.starts_with("https://") {
-        return Redirect::temporary(raw_path).into_response();
+        let Ok(url) = reqwest::Url::parse(raw_path) else {
+            return StatusCode::NOT_FOUND.into_response();
+        };
+        if !url.username().is_empty() || url.password().is_some() {
+            return StatusCode::NOT_FOUND.into_response();
+        }
+        let host_trusted = url.scheme() == "https"
+            && url.host_str().is_some_and(is_trusted_cover_host);
+        if host_trusted || is_known_cover_in_db(&state.pool, raw_path).await {
+            return with_session_cookie(Redirect::temporary(raw_path).into_response(), cookie);
+        }
+        return StatusCode::NOT_FOUND.into_response();
     }
 
     if raw_path.starts_with("data:") {
         if let Some((meta, b64)) = raw_path.split_once(',') {
-            use base64::Engine;
-            if let Ok(bytes) = base64::engine::general_purpose::STANDARD.decode(b64) {
-                let mime = meta
-                    .strip_prefix("data:")
-                    .and_then(|s| s.split(';').next())
-                    .unwrap_or("image/jpeg");
-                return ([(header::CONTENT_TYPE, mime)], bytes).into_response();
+            let mime = meta
+                .strip_prefix("data:")
+                .and_then(|s| s.split(';').next())
+                .map(str::trim)
+                .unwrap_or("")
+                .to_ascii_lowercase();
+            let allowed_mime = matches!(
+                mime.as_str(),
+                "image/jpeg" | "image/jpg" | "image/png" | "image/webp" | "image/gif"
+            );
+            if allowed_mime {
+                use base64::Engine;
+                if let Ok(bytes) = base64::engine::general_purpose::STANDARD.decode(b64) {
+                    if sniff_image_mime_bytes(&bytes).is_some() {
+                        let out_mime = if mime == "image/jpg" { "image/jpeg" } else { mime.as_str() };
+                        let resp = (
+                            [
+                                (header::CONTENT_TYPE, out_mime),
+                                (header::X_CONTENT_TYPE_OPTIONS, "nosniff"),
+                                (header::CONTENT_SECURITY_POLICY, "sandbox"),
+                            ],
+                            bytes,
+                        )
+                            .into_response();
+                        return with_session_cookie(resp, cookie);
+                    }
+                }
             }
         }
         return StatusCode::NOT_FOUND.into_response();
     }
 
-    let path = PathBuf::from(raw_path);
-    if !path.is_file() {
+    let Ok(canon) = std::fs::canonicalize(PathBuf::from(raw_path)) else {
+        return StatusCode::NOT_FOUND.into_response();
+    };
+    if !canon.is_file() || !is_allowed_cover_extension(&canon) {
         return StatusCode::NOT_FOUND.into_response();
     }
 
-    match ServeFile::new(&path).oneshot(request).await {
+    let roots = allowed_cover_roots(&state.app_handle);
+    let in_roots = roots.iter().any(|root| canon.starts_with(root));
+    let in_db = if in_roots {
+        true
+    } else {
+        let canon_str = canon.to_string_lossy();
+        is_known_cover_in_db(&state.pool, raw_path).await
+            || is_known_cover_in_db(&state.pool, &canon_str).await
+    };
+    if !in_roots && !in_db {
+        return StatusCode::NOT_FOUND.into_response();
+    }
+
+    if sniff_image_file(&canon).is_none() {
+        return StatusCode::NOT_FOUND.into_response();
+    }
+
+    match ServeFile::new(&canon).oneshot(request).await {
         Ok(resp) => {
             let mut resp = resp.map(Body::new).into_response();
             resp.headers_mut().insert(
                 header::CACHE_CONTROL,
                 HeaderValue::from_static("public, max-age=86400"),
             );
-            resp
+            resp.headers_mut().insert(
+                header::X_CONTENT_TYPE_OPTIONS,
+                HeaderValue::from_static("nosniff"),
+            );
+            with_session_cookie(resp, cookie)
         }
         Err(_) => StatusCode::NOT_FOUND.into_response(),
     }
@@ -1134,5 +1473,38 @@ mod tests {
         assert!(playlists.len() >= 2);
         assert_eq!(playlists[0].id, "liked");
         assert_eq!(playlists[1].id, "recent");
+    }
+
+    #[test]
+    fn validates_cover_hosts_extensions_and_magic_bytes() {
+        assert!(is_trusted_cover_host("static.qobuz.com"));
+        assert!(is_trusted_cover_host("resources.tidal.com"));
+        assert!(is_trusted_cover_host("is1-ssl.mzstatic.com"));
+        assert!(!is_trusted_cover_host("evil.example.com"));
+        assert!(!is_trusted_cover_host("qobuz.com.evil.com"));
+
+        assert!(is_allowed_cover_extension(StdPath::new("/tmp/a.jpg")));
+        assert!(is_allowed_cover_extension(StdPath::new("/tmp/a.PNG")));
+        assert!(!is_allowed_cover_extension(StdPath::new("/tmp/a.svg")));
+        assert!(!is_allowed_cover_extension(StdPath::new("/etc/passwd")));
+
+        assert_eq!(sniff_image_mime_bytes(&[0xFF, 0xD8, 0xFF, 0xE0]), Some("image/jpeg"));
+        assert_eq!(sniff_image_mime_bytes(b"\x89PNG\r\n\x1a\nxxxx"), Some("image/png"));
+        assert_eq!(sniff_image_mime_bytes(b"<svg><script>"), None);
+    }
+
+    #[test]
+    fn enforces_same_origin_header_checks() {
+        let mut h = HeaderMap::new();
+        h.insert(header::HOST, HeaderValue::from_static("192.168.1.50:8300"));
+        h.insert(header::ORIGIN, HeaderValue::from_static("http://192.168.1.50:8300"));
+        assert!(is_same_origin(&h));
+
+        h.insert(header::ORIGIN, HeaderValue::from_static("https://evil.example"));
+        assert!(!is_same_origin(&h));
+
+        let mut h2 = HeaderMap::new();
+        h2.insert("sec-fetch-site", HeaderValue::from_static("cross-site"));
+        assert!(!is_same_origin(&h2));
     }
 }

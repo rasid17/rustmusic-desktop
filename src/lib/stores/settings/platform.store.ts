@@ -3,9 +3,19 @@
 import { get, writable } from "svelte/store";
 import { invoke } from "@tauri-apps/api/core";
 
-export type PlatformFeatures = { flatpak: boolean; exclusive: boolean };
+export type PlatformFeatures = {
+  flatpak: boolean;
+  exclusive: boolean;
+  wayland: boolean;
+  updater_supported: boolean;
+};
 
-export const platformFeatures = writable<PlatformFeatures>({ flatpak: false, exclusive: true });
+export const platformFeatures = writable<PlatformFeatures>({
+  flatpak: false,
+  exclusive: true,
+  wayland: false,
+  updater_supported: true,
+});
 
 let lecture: Promise<PlatformFeatures> | null = null;
 

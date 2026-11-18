@@ -3,7 +3,10 @@ import { isDated, decadeOf, shortDecade, decadeHue } from "#lib/helper/library/p
 import type { SourceMix } from "#lib/stores/mix/mix.store";
 import type { GenreMix } from "#lib/types/ui/library/genre/GenreMix";
 import type { AlbumListView } from "#lib/types/ui/library/album/AlbumListView";
+import type { TrackListView } from "#lib/types/ui/library/track/TrackListView";
 import type { Playlist } from "#lib/types/db/playlist/Playlist";
+
+export type ActionMix = { icone: string; libelle: string; danger?: boolean; agir: (liste: TrackListView[]) => void };
 
 /** Un mix à afficher : ce qu'on tire, et comment on le présente. */
 export type SpecMix = {

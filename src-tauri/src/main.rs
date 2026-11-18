@@ -2,7 +2,6 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 
-#[tokio::main]
-async fn main() {
-    rustmusic_lib::run().await
+fn main() {
+    rustmusic_lib::run()
 }

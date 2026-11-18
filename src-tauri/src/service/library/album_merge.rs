@@ -134,7 +134,7 @@ pub async fn consolidate(pool: &SqlitePool) -> Result<AlbumMergeReport, String> 
             .collect();
 
     let mut tx = pool
-        .begin()
+        .begin_with("BEGIN IMMEDIATE")
         .await
         .map_err(|e| format!("Ouverture de la transaction : {e}"))?;
 

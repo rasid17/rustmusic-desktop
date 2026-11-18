@@ -113,28 +113,33 @@ pub async fn get_track_locations(
         return Ok(Vec::new());
     }
 
-    // Les `?` sont générés, jamais les valeurs : elles restent liées.
-    let trous = vec!["?"; paths.len()].join(",");
-    let sql = format!(
-        "SELECT f.path AS path,
-                t.library_id AS library_id,
-                t.id AS library_track_id,
-                t.artist_id AS artist_id,
-                t.library_album_id AS library_album_id
-         FROM library_tracks t
-         JOIN library_files f ON f.id = t.file_id
-         WHERE f.path IN ({trous})"
-    );
+    let mut locations = Vec::with_capacity(paths.len());
+    for chunk in paths.chunks(400) {
+        let trous = vec!["?"; chunk.len()].join(",");
+        let sql = format!(
+            "SELECT f.path AS path,
+                    t.library_id AS library_id,
+                    t.id AS library_track_id,
+                    t.artist_id AS artist_id,
+                    t.library_album_id AS library_album_id
+             FROM library_tracks t
+             JOIN library_files f ON f.id = t.file_id
+             WHERE f.path IN ({trous})"
+        );
 
-    let mut requete = sqlx::query_as::<_, TrackLocation>(sqlx::AssertSqlSafe(sql));
-    for p in &paths {
-        requete = requete.bind(p);
+        let mut requete = sqlx::query_as::<_, TrackLocation>(sqlx::AssertSqlSafe(sql));
+        for p in chunk {
+            requete = requete.bind(p);
+        }
+
+        let rows = requete
+            .fetch_all(&state.pool)
+            .await
+            .map_err(|e| format!("Failed to locate tracks: {e}"))?;
+        locations.extend(rows);
     }
 
-    requete
-        .fetch_all(&state.pool)
-        .await
-        .map_err(|e| format!("Failed to locate tracks: {e}"))
+    Ok(locations)
 }
 
 #[tauri::command]
@@ -385,7 +390,19 @@ pub async fn list_directory(
         let entry_path = entry.path();
         let path_string = base.join(&name).to_string_lossy().to_string();
 
-        if file_type.is_dir() {
+        let is_symlink = file_type.is_symlink();
+        let is_dir = file_type.is_dir()
+            || (is_symlink
+                && entry_path.is_dir()
+                && std::fs::canonicalize(&entry_path).is_ok_and(|canon| {
+                    dirs.iter().any(|d| {
+                        std::fs::canonicalize(&d.path)
+                            .is_ok_and(|root| canon.starts_with(root))
+                    })
+                }));
+        let is_file = file_type.is_file() || (is_symlink && entry_path.is_file());
+
+        if is_dir {
             entries.push(DirEntry {
                 name,
                 path: path_string,
@@ -398,7 +415,7 @@ pub async fn list_directory(
                 thumbnail_path: None,
                 track_id: None,
             });
-        } else if file_type.is_file() {
+        } else if is_file {
             let ext = entry_path.extension()
                 .and_then(|e| e.to_str())
                 .map(|e| e.to_lowercase());
@@ -406,7 +423,7 @@ pub async fn list_directory(
             // Ne montrer que les fichiers audio
             if let Some(ref ext_str) = ext {
                 if AUDIO_EXTENSIONS.contains(&ext_str.as_str()) {
-                    let size = entry.metadata().map(|m| m.len()).unwrap_or(0);
+                    let size = std::fs::metadata(&entry_path).map(|m| m.len()).unwrap_or(0);
                     entries.push(DirEntry {
                         name,
                         path: path_string,
@@ -596,14 +613,56 @@ pub fn save_thumbnail_from_file(
 }
 
 #[tauri::command]
-pub fn read_cover_as_base64(path: String) -> Result<String, String> {
-    // Générer la miniature à la volée si elle n'existe pas
-    let resolved = resolve_thumbnail(&path).unwrap_or(path);
+pub async fn read_cover_as_base64(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+    path: String,
+) -> Result<String, String> {
+    use crate::core::mobile_remote::router::{
+        allowed_cover_roots, is_allowed_cover_extension, is_known_cover_in_db,
+        sniff_image_mime_bytes,
+    };
 
-    let data = std::fs::read(&resolved).map_err(|e| e.to_string())?;
-    let mime = if data.starts_with(&[0xFF, 0xD8]) { "image/jpeg" }
-               else if data.starts_with(b"\x89PNG") { "image/png" }
-               else { "image/jpeg" };
+    // Générer la miniature à la volée si elle n'existe pas
+    let resolved = resolve_thumbnail(&path).unwrap_or_else(|| path.clone());
+    let canon = std::fs::canonicalize(&resolved)
+        .map_err(|_| "Cover path not found".to_string())?;
+    if !canon.is_file() || !is_allowed_cover_extension(&canon) {
+        return Err("Cover path is not a valid image file".to_string());
+    }
+
+    let mut allowed = allowed_cover_roots(&app)
+        .iter()
+        .any(|root| canon.starts_with(root));
+
+    if !allowed {
+        let dir_paths: Vec<String> = sqlx::query_scalar("SELECT path FROM library_dirs")
+            .fetch_all(&state.pool)
+            .await
+            .unwrap_or_default();
+        allowed = dir_paths.into_iter().any(|dir| {
+            std::fs::canonicalize(&dir)
+                .map(|root| canon.starts_with(root))
+                .unwrap_or(false)
+        });
+    }
+
+    if !allowed {
+        let canon_str = canon.to_string_lossy();
+        allowed = is_known_cover_in_db(&state.pool, &resolved).await
+            || is_known_cover_in_db(&state.pool, &path).await
+            || is_known_cover_in_db(&state.pool, &canon_str).await;
+    }
+
+    if !allowed {
+        return Err("Cover path outside allowed directories".to_string());
+    }
+
+    let data = tokio::fs::read(&canon)
+        .await
+        .map_err(|e| e.to_string())?;
+    let mime = sniff_image_mime_bytes(&data)
+        .ok_or_else(|| "Unsupported or invalid cover image data".to_string())?;
     let encoded = general_purpose::STANDARD.encode(&data);
     Ok(format!("data:{};base64,{}", mime, encoded))
 }

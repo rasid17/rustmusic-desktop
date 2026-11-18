@@ -186,20 +186,27 @@ impl Resampler {
     /// puis la sortie est coupée à `trames reçues × ratio` exactement.
     /// Une fois en fin de média ; `reset` avant de resservir.
     pub fn finish(&mut self) -> Vec<f32> {
+        if self.chunk_size == 0 || self.channels == 0 {
+            return Vec::new();
+        }
         let expected = (self.in_frames as f64 * self.fft.resample_ratio()).round() as usize;
         let mut tail: Vec<f32> = Vec::new();
         let mut passes = 0;
 
         while self.out_frames < expected && passes < 16 {
-            let pad_frames = self.chunk_size - self.accumulator[0].len();
+            let buffered = self.accumulator.first().map_or(0, Vec::len);
+            let pad_frames = self.chunk_size.saturating_sub(buffered).max(1);
             let zeros = vec![0.0f32; pad_frames * self.channels];
             tail.extend(self.process_interleaved(&zeros));
             passes += 1;
         }
 
         if self.out_frames > expected {
-            let excess = (self.out_frames - expected).min(tail.len() / self.channels);
-            tail.truncate(tail.len() - excess * self.channels);
+            let excess = self
+                .out_frames
+                .saturating_sub(expected)
+                .min(tail.len() / self.channels);
+            tail.truncate(tail.len().saturating_sub(excess * self.channels));
             self.out_frames -= excess;
         }
         tail
@@ -251,5 +258,15 @@ mod tests {
         // Et la fin n'est pas coupée.
         let tail = out.chunks(2).rev().take(200).map(|f| f[0].abs()).fold(0.0f32, f32::max);
         assert!(tail > 0.05, "tail cut off, peak {tail}");
+    }
+
+    #[test]
+    fn finish_never_underflows_when_accumulator_at_or_above_chunk_size() {
+        let mut rs = Resampler::maybe_new(44_100, 48_000, 2).unwrap().unwrap();
+        let tiny = sine(10, 44_100);
+        let _ = rs.process_interleaved(&tiny);
+        rs.accumulator[0].resize(rs.chunk_size + 8, 0.0);
+        rs.accumulator[1].resize(rs.chunk_size + 8, 0.0);
+        let _ = rs.finish();
     }
 }

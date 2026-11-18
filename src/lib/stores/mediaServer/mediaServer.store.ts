@@ -1,6 +1,6 @@
 import { writable, get } from "svelte/store";
 import { invoke } from "@tauri-apps/api/core";
-import { listen } from "@tauri-apps/api/event";
+import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { t } from "#lib/i18n";
 import { toasts } from "#lib/stores/ui/toast.store";
 import { profilSelector } from "#lib/stores/profil/profil.store";
@@ -57,6 +57,8 @@ async function check() {
 }
 
 let watching: ReturnType<typeof setInterval> | null = null;
+let watchGen = 0;
+let watchUnlisteners: UnlistenFn[] = [];
 
 /** Le sélecteur de bibliothèque suit : ajout, retrait, activation. */
 async function afterChange() {
@@ -75,10 +77,19 @@ export const serverStore = {
   /** Au lancement : l'état des serveurs, puis toutes les deux minutes. */
   watch() {
     if (watching) return;
-    void listen<string>("server-play-error", (e) =>
+    const gen = ++watchGen;
+    const track = async <T>(event: string, cb: Parameters<typeof listen<T>>[1]) => {
+      const off = await listen<T>(event, cb);
+      if (gen !== watchGen) {
+        off();
+        return;
+      }
+      watchUnlisteners.push(off);
+    };
+    void track<string>("server-play-error", (e) =>
       toasts.push({ type: "error", title: get(t)("servers.error_play"), message: e.payload }));
     // Synchronisation d'une distante finie : les favoris venus du serveur.
-    void listen<{ library_id: number }>("import-complete", (e) => {
+    void track<{ library_id: number }>("import-complete", (e) => {
       if (!get(libraryStore).libraries.some((l) => l.id === e.payload.library_id && l.server_id)) return;
       void liked.refresh();
       void playlistStore.refresh();
@@ -87,6 +98,17 @@ export const serverStore = {
     void check();
     offlineStore.init();
     watching = setInterval(() => void check(), 120_000);
+  },
+
+  destroy() {
+    watchGen++;
+    if (watching) {
+      clearInterval(watching);
+      watching = null;
+    }
+    watchUnlisteners.forEach((f) => f());
+    watchUnlisteners = [];
+    offlineStore.destroy();
   },
 
   /** Morceau d'un serveur injoignable ou désactivé, sauf gardé hors ligne : la lecture le saute. */
@@ -102,7 +124,7 @@ export const serverStore = {
 
   async add(c: ServerCredentials, name: string | null, folderIds: string[]) {
     const profilId = currentProfileId();
-    if (profilId == null) throw new Error("aucun profil");
+    if (profilId == null) throw new Error(get(t)("common.no_profile"));
     const s = await invoke<ServerEntry>("server_add", {
       profilId, kind: c.kind, url: c.url, username: c.username, password: c.password, apiKey: c.apiKey, name, folderIds,
     });

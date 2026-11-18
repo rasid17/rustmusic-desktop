@@ -26,13 +26,24 @@ type TaskMap = Record<string, Task>;
 const taskWriter = writable<TaskMap>({});
 
 let unlisteners: UnlistenFn[] = [];
+let initGen = 0;
+const dismissTimers = new Map<string, ReturnType<typeof setTimeout>>();
 
 const defaultTask: Task = {
   id: "", label: "", icon: "", current: 0, total: 0,
   percent: 0, detail: "", active: true,
 };
 
+function clearDismissTimer(id: string) {
+  const timer = dismissTimers.get(id);
+  if (timer) {
+    clearTimeout(timer);
+    dismissTimers.delete(id);
+  }
+}
+
 function upsertTask(id: string, update: Partial<Task>) {
+  clearDismissTimer(id);
   taskWriter.update(tasks => {
     const existing = tasks[id] ?? { ...defaultTask, id };
     return {
@@ -43,6 +54,7 @@ function upsertTask(id: string, update: Partial<Task>) {
 }
 
 function completeTask(id: string) {
+  clearDismissTimer(id);
   taskWriter.update(tasks => {
     if (!tasks[id]) return tasks;
     return {
@@ -52,20 +64,34 @@ function completeTask(id: string) {
   });
 
   // Auto-dismiss après 4s
-  setTimeout(() => {
+  const timer = setTimeout(() => {
+    dismissTimers.delete(id);
     taskWriter.update(tasks => {
       const { [id]: _, ...rest } = tasks;
       return rest;
     });
   }, 4000);
+  dismissTimers.set(id, timer);
 }
 
 export const taskProgressStore = {
   subscribe: taskWriter.subscribe,
 
   init: async () => {
+    unlisteners.forEach(u => u());
+    unlisteners = [];
+    const gen = ++initGen;
+    const track = async <T>(event: string, handler: Parameters<typeof listen<T>>[1]): Promise<void> => {
+      const off = await listen<T>(event, handler);
+      if (gen !== initGen) {
+        off();
+        return;
+      }
+      unlisteners.push(off);
+    };
+
     // ─── Import de fichiers ───
-    const u1 = await listen<{ current: number; total: number; percent: number; file_name: string }>(
+    await track<{ current: number; total: number; percent: number; file_name: string }>(
       'import-progress', (e) => {
         // Pendant un rescan, sa tâche porte déjà la progression de toute la bibliothèque.
         if (get(taskWriter)['rescan']?.active) {
@@ -84,7 +110,7 @@ export const taskProgressStore = {
     );
 
     // Listage d'un dossier ajouté ; le rescan a déjà sa tâche.
-    const u1b = await listen<{ found: number }>(
+    await track<{ found: number }>(
       'import-listing', (e) => {
         if (get(taskWriter)['rescan']?.active) return;
         upsertTask('import', {
@@ -99,7 +125,7 @@ export const taskProgressStore = {
       }
     );
 
-    const u2 = await listen<{ total: number; duration_ms: number; cancelled: boolean }>(
+    await track<{ total: number; duration_ms: number; cancelled: boolean }>(
       'import-complete', (e) => {
         if (get(taskWriter)['rescan']?.active) return;
         upsertTask('import', {
@@ -116,7 +142,7 @@ export const taskProgressStore = {
     );
 
     // ─── Images artistes ───
-    const u3 = await listen<{ current: number; total: number; name: string }>(
+    await track<{ current: number; total: number; name: string }>(
       'artist-image-progress', (e) => {
         const pct = e.payload.total > 0 ? Math.round((e.payload.current * 100) / e.payload.total) : 0;
         upsertTask('artist-images', {
@@ -130,10 +156,10 @@ export const taskProgressStore = {
       }
     );
     // Fin ou arrêt : la passe le dit elle-même (la dernière progression n'est pas la fin du travail).
-    const u3b = await listen('artist-image-complete', () => completeTask('artist-images'));
+    await track('artist-image-complete', () => completeTask('artist-images'));
 
     // ─── Pochettes d'albums ───
-    const u3c = await listen<{ current: number; total: number; name: string }>(
+    await track<{ current: number; total: number; name: string }>(
       'album-cover-progress', (e) => {
         upsertTask('album-covers', {
           label: get(t)("system.task_album_covers"),
@@ -145,10 +171,10 @@ export const taskProgressStore = {
         });
       }
     );
-    const u3d = await listen('album-cover-complete', () => completeTask('album-covers'));
+    await track('album-cover-complete', () => completeTask('album-covers'));
 
     // ─── Rescan bibliothèque ───
-    const u4 = await listen<{ library_name: string }>(
+    await track<{ library_name: string }>(
       'rescan-start', (e) => {
         upsertTask('rescan', {
           label: get(t)("system.task_rescan").replace("{name}", e.payload.library_name),
@@ -159,13 +185,13 @@ export const taskProgressStore = {
       }
     );
 
-    const u5 = await listen<{ library_name: string }>(
+    await track<{ library_name: string }>(
       'rescan-complete', (_e) => {
         completeTask('rescan');
       }
     );
 
-    const u5b = await listen<{ library_id: number; current: number; total: number }>(
+    await track<{ library_id: number; current: number; total: number }>(
       'rescan-progress', (e) => {
         const { current, total } = e.payload;
         upsertTask('rescan', { current, total, percent: total > 0 ? Math.round(current * 100 / total) : 0 });
@@ -173,7 +199,7 @@ export const taskProgressStore = {
     );
 
     // ─── Migration miniatures (covers + artistes, même event) ───
-    const u6 = await listen<{ current: number; total: number; percent: number; file_name: string }>(
+    await track<{ current: number; total: number; percent: number; file_name: string }>(
       'migration-progress', (e) => {
         upsertTask('migration', {
           label: get(t)("system.task_thumbnails"),
@@ -191,7 +217,7 @@ export const taskProgressStore = {
     );
 
     // ─── Pré-décodage du morceau (profil Minimal) ───
-    const u7 = await listen<boolean>('playback-preparing', (e) => {
+    await track<boolean>('playback-preparing', (e) => {
       if (e.payload) {
         upsertTask('playback-preparing', {
           label: get(t)("player.preparing"),
@@ -208,7 +234,7 @@ export const taskProgressStore = {
     });
 
     // Progression du pré-décodage (octets décodés / total estimé).
-    const u8 = await listen<{ decoded_bytes: number; total_bytes: number }>(
+    await track<{ decoded_bytes: number; total_bytes: number }>(
       'playback-preparing-progress',
       (e) => {
         const { decoded_bytes, total_bytes } = e.payload;
@@ -230,11 +256,10 @@ export const taskProgressStore = {
         });
       },
     );
-
-    unlisteners = [u1, u1b, u2, u3, u3b, u3c, u3d, u4, u5, u5b, u6, u7, u8];
   },
 
   cancel: (id: string) => {
+    clearDismissTimer(id);
     taskWriter.update(tasks => {
       const { [id]: _, ...rest } = tasks;
       return rest;
@@ -242,6 +267,9 @@ export const taskProgressStore = {
   },
 
   destroy: () => {
+    initGen++;
+    for (const timer of dismissTimers.values()) clearTimeout(timer);
+    dismissTimers.clear();
     unlisteners.forEach(u => u());
     unlisteners = [];
   },

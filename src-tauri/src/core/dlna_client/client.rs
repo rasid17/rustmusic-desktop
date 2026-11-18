@@ -97,7 +97,7 @@ pub fn parse_description(body: &str, location: &str) -> Option<Description> {
 }
 
 async fn describe(location: &str) -> Result<Description, String> {
-    let resp = client().get(location).timeout(Duration::from_secs(8)).send().await.map_err(|e| format!("serveur injoignable : {e}"))?;
+    let resp = client().get(location).timeout(Duration::from_secs(3)).send().await.map_err(|e| format!("serveur injoignable : {e}"))?;
     if !resp.status().is_success() {
         return Err(format!("serveur : HTTP {}", resp.status().as_u16()));
     }
@@ -127,10 +127,14 @@ pub fn relocations(lost: &[(i64, String)], found: &[Found]) -> Vec<(i64, String)
 /// Les serveurs DLNA du réseau ; `own` : l'UDN du serveur de RustMusic, écarté.
 pub async fn discover(wait: Duration, own: Option<&str>) -> Vec<Found> {
     let locations = discovery::search(wait, &[MEDIA_SERVER]).await;
+    let mut set = tokio::task::JoinSet::new();
+    for location in locations {
+        set.spawn(async move { describe(&location).await.ok().map(|d| (location, d)) });
+    }
     let mut found = Vec::new();
     let mut seen = HashSet::new();
-    for location in locations {
-        let Ok(d) = describe(&location).await else { continue };
+    while let Some(res) = set.join_next().await {
+        let Ok(Some((location, d))) = res else { continue };
         if own.is_some_and(|o| d.udn.eq_ignore_ascii_case(o)) || !seen.insert(d.udn.clone()) {
             continue;
         }
@@ -146,11 +150,19 @@ impl Server {
         if raw.trim().is_empty() {
             return Err("adresse du serveur vide".into());
         }
-        let mut last = String::new();
+        let mut set = tokio::task::JoinSet::new();
         for location in candidates(raw) {
-            match describe(&location).await {
-                Ok(d) => return Ok((Server { location }, info_of(&d))),
-                Err(e) => last = e,
+            set.spawn(async move {
+                let res = describe(&location).await;
+                (location, res)
+            });
+        }
+        let mut last = String::new();
+        while let Some(res) = set.join_next().await {
+            if let Ok((location, Ok(d))) = res {
+                return Ok((Server { location }, info_of(&d)));
+            } else if let Ok((_, Err(e))) = res {
+                last = e;
             }
         }
         Err(last)

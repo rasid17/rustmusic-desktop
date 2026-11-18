@@ -30,19 +30,31 @@ pub async fn run_listener(
     local_ip: Ipv4Addr,
     mut shutdown: broadcast::Receiver<()>,
 ) -> Result<(), DlnaError> {
-    let std_sock = match std::net::UdpSocket::bind(("0.0.0.0", SSDP_PORT)) {
-        Ok(s) => s,
-        Err(e) => {
-            log::warn!(
-                "SSDP listener cannot bind 0.0.0.0:{} ({}). \
-                 M-SEARCH responses disabled (NOTIFY alive still active). \
-                 On Windows, this is usually the SSDP Discovery service holding the port.",
-                SSDP_PORT,
-                e
-            );
-            return Ok(());
-        }
-    };
+    let sock = socket2::Socket::new(
+        socket2::Domain::IPV4,
+        socket2::Type::DGRAM,
+        Some(socket2::Protocol::UDP),
+    )
+    .map_err(DlnaError::Io)?;
+    if let Err(e) = sock.set_reuse_address(true) {
+        log::debug!("SSDP SO_REUSEADDR failed: {e}");
+    }
+    #[cfg(all(unix, not(any(target_os = "solaris", target_os = "illumos"))))]
+    if let Err(e) = sock.set_reuse_port(true) {
+        log::debug!("SSDP SO_REUSEPORT failed: {e}");
+    }
+    let bind_addr = std::net::SocketAddrV4::new(Ipv4Addr::UNSPECIFIED, SSDP_PORT);
+    if let Err(e) = sock.bind(&bind_addr.into()) {
+        log::warn!(
+            "SSDP listener cannot bind 0.0.0.0:{} ({}). \
+             M-SEARCH responses disabled (NOTIFY alive still active). \
+             On Windows, this is usually the SSDP Discovery service holding the port.",
+            SSDP_PORT,
+            e
+        );
+        return Ok(());
+    }
+    let std_sock: std::net::UdpSocket = sock.into();
     std_sock.set_nonblocking(true).map_err(DlnaError::Io)?;
     // Groupe rejoint sur chaque carte locale, pas sur les tunnels VPN.
     let mut joined = Vec::new();
@@ -84,6 +96,7 @@ pub async fn run_listener(
                             }
                         }
                     }
+                    Err(e) if matches!(e.kind(), std::io::ErrorKind::ConnectionReset | std::io::ErrorKind::Interrupted) || e.raw_os_error() == Some(10054) => continue,
                     Err(e) => log::debug!("SSDP recv error: {}", e),
                 }
             }

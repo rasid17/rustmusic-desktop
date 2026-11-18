@@ -76,12 +76,21 @@ impl FolderCovers {
     }
 }
 
-/// Date de modification d'un fichier, en secondes, telle qu'enregistrée en base.
-fn modified_secs(metadata: &std::fs::Metadata) -> Option<String> {
-    metadata.modified()
+fn effective_modified_secs(
+    audio_meta: &std::fs::Metadata,
+    cue_path: Option<&Path>,
+) -> Option<String> {
+    let audio_secs = audio_meta
+        .modified()
         .ok()
         .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
-        .map(|d| d.as_secs().to_string())
+        .map(|d| d.as_secs());
+    let cue_secs = cue_path
+        .and_then(|p| std::fs::metadata(p).ok())
+        .and_then(|m| m.modified().ok())
+        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+        .map(|d| d.as_secs());
+    audio_secs.max(cue_secs).map(|s| s.to_string())
 }
 
 /// Sort de la phase d'analyse d'un fichier.
@@ -100,12 +109,14 @@ fn analyse_or_reuse(
     covers: &FolderCovers,
 ) -> Etape {
     if let Some((id, Some(en_base))) = file.to_str().and_then(|p| indexes.get(p)) {
-        let meta_target = if let Some(cue_info) = file.to_str().and_then(crate::core::cue::parse_cue_uri) {
-            cue_info.real_path
-        } else {
-            file.clone()
-        };
-        let sur_disque = std::fs::metadata(&meta_target).ok().as_ref().and_then(modified_secs);
+        let cue_info = file.to_str().and_then(crate::core::cue::parse_cue_uri);
+        let meta_target = cue_info
+            .as_ref()
+            .map(|c| c.real_path.clone())
+            .unwrap_or_else(|| file.clone());
+        let sur_disque = std::fs::metadata(&meta_target).ok().and_then(|m| {
+            effective_modified_secs(&m, cue_info.as_ref().and_then(|c| c.cue_path.as_deref()))
+        });
         if sur_disque.as_ref() == Some(en_base) {
             return Etape::Inchange(id.clone());
         }
@@ -155,7 +166,10 @@ fn analyse_file_inner(file: &PathBuf, covers_dir: &PathBuf, covers: &FolderCover
 
     let metadata = std::fs::metadata(&meta_target).map_err(|e| format!("metadata: {}", e))?;
     let size = metadata.len() as i64;
-    let file_modified = modified_secs(&metadata);
+    let file_modified = effective_modified_secs(
+        &metadata,
+        cue_info.as_ref().and_then(|c| c.cue_path.as_deref()),
+    );
 
     let audio_file = AudioAnalyser::analyse_for_import(file).map_err(|e| e.to_string())?;
 
@@ -585,13 +599,19 @@ pub async fn save_files_to_library(
 
     // ─── Les fichiers disparus du dossier depuis le dernier scan ───
     // Uniquement si le listage est allé à son bout : un listage interrompu
-    // effacerait des pistes simplement pas encore vues.
-    let retires = match prune_missing_files(pool_api, library_id, &directory, &files).await {
-        Ok(v) => v,
-        Err(e) => {
-            log::warn!("🧹 Tri des fichiers disparus manqué ({directory}) : {e}");
-            Vec::new()
+    // effacerait des pistes simplement pas encore vues. Et jamais si le dossier
+    // racine lui-même n'est plus monté / accessible sur disque.
+    let retires = if std::path::Path::new(&directory).exists() {
+        match prune_missing_files(pool_api, library_id, &directory, &files).await {
+            Ok(v) => v,
+            Err(e) => {
+                log::warn!("🧹 Tri des fichiers disparus manqué ({directory}) : {e}");
+                Vec::new()
+            }
         }
+    } else {
+        log::warn!("📁 Dossier introuvable ({directory}) : tri des fichiers disparus ignoré");
+        Vec::new()
     };
 
     // Émettre l'événement de fin au frontend

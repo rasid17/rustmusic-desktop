@@ -249,7 +249,7 @@ pub async fn update_playlist(
 /// Nouvel ordre des playlists du profil (barre latérale), `ids` dans l'ordre voulu.
 #[tauri::command]
 pub async fn reorder_playlists(state: State<'_, AppState>, profil_id: i64, ids: Vec<i64>) -> Result<(), String> {
-    let mut tx = state.pool.begin().await.map_err(|e| e.to_string())?;
+    let mut tx = state.pool.begin_with("BEGIN IMMEDIATE").await.map_err(|e| e.to_string())?;
     for (position, id) in ids.iter().enumerate() {
         sqlx::query("UPDATE playlists SET position = ? WHERE id = ? AND profil_id = ?")
             .bind(position as i64)

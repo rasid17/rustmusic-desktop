@@ -98,8 +98,9 @@ impl Server {
     /// Tous les morceaux d'un dossier musical ; `progress` reçoit le nombre déjà listé.
     pub async fn all_songs(&self, folder_id: &str, mut progress: impl FnMut(usize)) -> Result<Vec<RemoteSong>, String> {
         let mut songs = Vec::new();
+        let mut raw_offset = 0usize;
         loop {
-            let offset = songs.len().to_string();
+            let offset = raw_offset.to_string();
             let count = PAGE.to_string();
             let resp = self
                 .call(
@@ -107,11 +108,13 @@ impl Server {
                     &[("query", ""), ("artistCount", "0"), ("albumCount", "0"), ("songCount", &count), ("songOffset", &offset), ("musicFolderId", folder_id)],
                 )
                 .await?;
-            let page = songs_of(resp.pointer("/searchResult3/song"));
-            let n = page.len();
+            let raw_arr = resp.pointer("/searchResult3/song");
+            let raw_len = raw_arr.and_then(Value::as_array).map_or(0, Vec::len);
+            let page = songs_of(raw_arr);
             songs.extend(page);
             progress(songs.len());
-            if n < PAGE {
+            raw_offset += raw_len;
+            if raw_len < PAGE {
                 break;
             }
         }
@@ -124,19 +127,20 @@ impl Server {
 
     async fn songs_by_album(&self, folder_id: &str, progress: &mut impl FnMut(usize)) -> Result<Vec<RemoteSong>, String> {
         let mut album_ids = Vec::new();
+        let mut raw_offset = 0usize;
         loop {
-            let offset = album_ids.len().to_string();
+            let offset = raw_offset.to_string();
             let resp = self
                 .call("getAlbumList2", &[("type", "alphabeticalByName"), ("size", "500"), ("offset", &offset), ("musicFolderId", folder_id)])
                 .await?;
-            let page: Vec<String> = resp
-                .pointer("/albumList2/album")
-                .and_then(Value::as_array)
+            let raw_arr = resp.pointer("/albumList2/album").and_then(Value::as_array);
+            let raw_len = raw_arr.map_or(0, Vec::len);
+            let page: Vec<String> = raw_arr
                 .map(|l| l.iter().filter_map(|a| a.get("id").and_then(id_of)).collect())
                 .unwrap_or_default();
-            let n = page.len();
             album_ids.extend(page);
-            if n < 500 {
+            raw_offset += raw_len;
+            if raw_len < 500 {
                 break;
             }
         }

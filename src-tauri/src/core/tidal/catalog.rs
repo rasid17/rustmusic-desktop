@@ -441,18 +441,29 @@ impl Server {
     }
 
     pub async fn add_to_playlist(&self, uuid: &str, songs: &[&str]) -> Result<(), String> {
+        self.add_to_playlist_with_dupes(uuid, songs, "SKIP").await
+    }
+
+    async fn add_to_playlist_with_dupes(
+        &self,
+        uuid: &str,
+        songs: &[&str],
+        on_dupes: &str,
+    ) -> Result<(), String> {
         if songs.is_empty() {
             return Ok(());
         }
-        let etag = self.playlist_etag(uuid).await;
-        let joined = songs.join(",");
-        self.post_form(
-            &format!("playlists/{uuid}/items"),
-            &[],
-            &[("trackIds", &joined), ("onDupes", "SKIP")],
-            Some(&etag),
-        )
-        .await?;
+        for chunk in songs.chunks(100) {
+            let etag = self.playlist_etag(uuid).await;
+            let joined = chunk.join(",");
+            self.post_form(
+                &format!("playlists/{uuid}/items"),
+                &[],
+                &[("trackIds", &joined), ("onDupes", on_dupes)],
+                Some(&etag),
+            )
+            .await?;
+        }
         Ok(())
     }
 
@@ -474,7 +485,7 @@ impl Server {
         .await
     }
 
-    /// Sinkronkan isi playlist TIDAL agar sesuai daftar ID track lokal.
+    /// Sinkronkan isi playlist TIDAL agar sesuai daftar ID track lokal (urutan & duplikat terjaga).
     pub async fn sync_playlist_tracks(&self, uuid: &str, desired_ids: &[String]) -> Result<(), String> {
         let items = self
             .fetch_paginated_items(&format!("playlists/{uuid}/tracks"), 2000)
@@ -483,26 +494,12 @@ impl Server {
             .iter()
             .filter_map(|item| item.get("item").unwrap_or(item).get("id").and_then(json_id))
             .collect();
-        let desired_set: HashSet<&str> = desired_ids.iter().map(String::as_str).collect();
-        let current_set: HashSet<&str> = current.iter().map(String::as_str).collect();
-
-        let to_remove: Vec<usize> = current
-            .iter()
-            .enumerate()
-            .filter(|(_, id)| !desired_set.contains(id.as_str()))
-            .map(|(i, _)| i)
-            .collect();
+        let (to_remove, to_add) = compute_ordered_sync(&current, desired_ids);
         if !to_remove.is_empty() {
             self.remove_from_playlist(uuid, &to_remove).await?;
         }
-
-        let to_add: Vec<&str> = desired_ids
-            .iter()
-            .map(String::as_str)
-            .filter(|id| !current_set.contains(*id))
-            .collect();
         if !to_add.is_empty() {
-            self.add_to_playlist(uuid, &to_add).await?;
+            self.add_to_playlist_with_dupes(uuid, &to_add, "ADD").await?;
         }
         Ok(())
     }
@@ -1019,4 +1016,30 @@ mod tests {
         assert_eq!(song.bit_depth, Some(24));
         assert_eq!(song.suffix.as_deref(), Some("flac"));
     }
+
+    #[test]
+    fn ordered_playlist_sync_preserves_duplicates_and_order() {
+        let cur = vec!["1".into(), "2".into(), "3".into()];
+        let des = vec!["1".into(), "3".into(), "2".into(), "1".into()];
+        let (remove, add) = compute_ordered_sync(&cur, &des);
+        assert_eq!(remove, vec![1, 2]);
+        assert_eq!(add, vec!["3", "2", "1"]);
+
+        // Pure append keeps prefix untouched.
+        let des_append = vec!["1".into(), "2".into(), "3".into(), "4".into()];
+        let (rem2, add2) = compute_ordered_sync(&cur, &des_append);
+        assert!(rem2.is_empty());
+        assert_eq!(add2, vec!["4"]);
+    }
+}
+
+fn compute_ordered_sync<'a>(current: &[String], desired: &'a [String]) -> (Vec<usize>, Vec<&'a str>) {
+    let prefix_len = current
+        .iter()
+        .zip(desired.iter())
+        .take_while(|(a, b)| a == b)
+        .count();
+    let to_remove: Vec<usize> = (prefix_len..current.len()).collect();
+    let to_add: Vec<&'a str> = desired[prefix_len..].iter().map(String::as_str).collect();
+    (to_remove, to_add)
 }

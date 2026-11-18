@@ -29,14 +29,20 @@
   let tidalAuth = $state<TidalDeviceAuth | null>(null);
   let tidalStarting = $state(false);
   let pollTimer: ReturnType<typeof setInterval> | null = null;
+  let pollingTick = false;
+  let destroyed = false;
 
   function stopTidalPoll() {
     if (pollTimer) {
       clearInterval(pollTimer);
       pollTimer = null;
     }
+    pollingTick = false;
   }
-  onDestroy(stopTidalPoll);
+  onDestroy(() => {
+    destroyed = true;
+    stopTidalPoll();
+  });
 
   let probe = $state<ServerProbe | null>(null);
   let name = $state("");
@@ -87,9 +93,11 @@
       void openUrl(auth.verificationUriComplete).catch(() => {});
       const intervalMs = Math.max(2000, (auth.interval || 2) * 1000);
       pollTimer = setInterval(async () => {
-        if (!tidalAuth || tidalAuth.deviceCode !== auth.deviceCode) return;
+        if (destroyed || pollingTick || !tidalAuth || tidalAuth.deviceCode !== auth.deviceCode) return;
+        pollingTick = true;
         try {
           const poll = await serverStore.tidalDevicePoll(auth.deviceCode, customClient);
+          if (destroyed || !tidalAuth || tidalAuth.deviceCode !== auth.deviceCode) return;
           if (poll.status === "authorized" && poll.accessToken) {
             stopTidalPoll();
             tidalAuth = null;
@@ -99,9 +107,12 @@
             await connect();
           }
         } catch (err) {
+          if (destroyed) return;
           stopTidalPoll();
           tidalAuth = null;
           erreur = errorMessage(err);
+        } finally {
+          pollingTick = false;
         }
       }, intervalMs);
     } catch (err) {
@@ -224,9 +235,9 @@
       <div class="flex items-start gap-3 px-4 py-3 rounded-xl border border-amber-500/30 bg-amber-500/8 text-xs leading-relaxed text-(--rg-tx2)">
         <Icon icon="material-symbols:high-quality-outline-rounded" width="20" class="shrink-0 mt-0.5 text-amber-500" />
         <div>
-          <p class="font-semibold text-(--rg-tx)">Qobuz Bit-Perfect Streaming (up to 24-bit / 192 kHz)</p>
+          <p class="font-semibold text-(--rg-tx)">{$t("streaming.qobuz_banner_title")}</p>
           <p class="mt-0.5 text-(--rg-mu)">
-            Uncompressed FLAC streams are decoded directly by Symphonia and sent to your exclusive audio output (ALSA / WASAPI / CoreAudio) without resampling.
+            {$t("streaming.qobuz_banner_desc")}
           </p>
         </div>
       </div>
@@ -234,9 +245,9 @@
       <div class="px-4 py-3 rounded-xl border border-cyan-500/30 bg-cyan-500/8 text-xs leading-relaxed text-(--rg-tx2) flex gap-2.5">
         <Icon icon="material-symbols:high-quality-outline-rounded" width="18" class="shrink-0 mt-0.5 text-cyan-500" />
         <div>
-          <p class="font-semibold text-(--rg-tx)">TIDAL Bit-Perfect MAX Streaming (up to 24-bit / 192 kHz)</p>
+          <p class="font-semibold text-(--rg-tx)">{$t("streaming.tidal_banner_title")}</p>
           <p class="mt-0.5 text-(--rg-mu)">
-            Uncompressed FLAC and Hi-Res DASH FLAC streams are decoded directly by Symphonia and sent to your exclusive audio output without resampling.
+            {$t("streaming.tidal_banner_desc")}
           </p>
         </div>
       </div>
@@ -256,12 +267,12 @@
         {#if !tidalAuth}
           <div class="flex flex-wrap items-center justify-between gap-3">
             <div>
-              <p class="text-sm font-semibold text-(--rg-tx)">Authorize via TIDAL Browser Login</p>
-              <p class="text-xs text-(--rg-mu) mt-0.5">Opens your browser to approve this device using OAuth 2.0 Device Flow.</p>
+              <p class="text-sm font-semibold text-(--rg-tx)">{$t("streaming.tidal_browser_title")}</p>
+              <p class="text-xs text-(--rg-mu) mt-0.5">{$t("streaming.tidal_browser_desc")}</p>
             </div>
             <GhostButton
               icon={tidalStarting ? "material-symbols:sync-rounded" : "material-symbols:login-rounded"}
-              label={tidalStarting ? "Starting..." : "Sign in with TIDAL"}
+              label={tidalStarting ? $t("streaming.tidal_starting") : $t("streaming.tidal_sign_in")}
               busy={tidalStarting}
               disabled={busy || tidalStarting}
               onclick={startTidalLogin}
@@ -272,24 +283,24 @@
             <div class="flex flex-wrap items-center justify-between gap-2">
               <div class="flex items-center gap-2 text-xs text-(--rg-tx2)">
                 <Icon icon="material-symbols:sync-rounded" width="16" class="animate-spin text-cyan-500" />
-                <span>Waiting for browser authorization...</span>
+                <span>{$t("streaming.tidal_waiting")}</span>
               </div>
               <button
                 type="button"
                 class="text-xs font-semibold text-(--rg-mu) hover:text-(--rg-tx) cursor-pointer"
                 onclick={() => { stopTidalPoll(); tidalAuth = null; }}
               >
-                Cancel
+                {$t("common.cancel")}
               </button>
             </div>
             <div class="flex flex-wrap items-center justify-between gap-3 px-3.5 py-2.5 rounded-lg bg-(--rg-s2)">
               <div>
-                <p class="text-[11px] uppercase tracking-wider text-(--rg-mu)">Device Code</p>
+                <p class="text-[11px] uppercase tracking-wider text-(--rg-mu)">{$t("streaming.tidal_device_code")}</p>
                 <p class="text-lg font-mono font-bold tracking-widest text-(--rg-tx)">{tidalAuth.userCode}</p>
               </div>
               <GhostButton
                 icon="material-symbols:open-in-new-rounded"
-                label="Open TIDAL Login"
+                label={$t("streaming.tidal_open_login")}
                 onclick={() => openUrl(tidalAuth!.verificationUriComplete)}
               />
             </div>
@@ -298,27 +309,27 @@
       </div>
     {:else if tidal && avecCle}
       <div class="grid gap-4 max-sm:grid-cols-1 grid-cols-2">
-        <FormField label="Access Token or Refresh Token" for="srv_tidal_tok" required>
-          <FormInput id="srv_tidal_tok" bind:value={password} mono password placeholder="Paste TIDAL OAuth token" disabled={busy} oninput={() => (erreur = null)} onenter={connect} />
+        <FormField label={$t("streaming.tidal_token_label")} for="srv_tidal_tok" required>
+          <FormInput id="srv_tidal_tok" bind:value={password} mono password placeholder={$t("streaming.tidal_token_ph")} disabled={busy} oninput={() => (erreur = null)} onenter={connect} />
         </FormField>
-        <FormField label="Custom Client ID:Secret (optional)" for="srv_key">
-          <FormInput id="srv_key" bind:value={apiKey} mono password placeholder="Leave blank for default" disabled={busy} oninput={() => (erreur = null)} onenter={connect} />
+        <FormField label={$t("streaming.tidal_client_label")} for="srv_key">
+          <FormInput id="srv_key" bind:value={apiKey} mono password placeholder={$t("streaming.tidal_client_ph")} disabled={busy} oninput={() => (erreur = null)} onenter={connect} />
         </FormField>
       </div>
     {:else if avecCle}
       <div class="grid gap-4 max-sm:grid-cols-1 {jellyfin || qobuz ? 'grid-cols-2' : ''}">
         {#if jellyfin || qobuz}
-          <FormField label={qobuz ? "Email or account label (optional)" : $t("servers.username")} for="srv_user" required={jellyfin}>
+          <FormField label={qobuz ? $t("streaming.qobuz_account_opt") : $t("servers.username")} for="srv_user" required={jellyfin}>
             <FormInput id="srv_user" bind:value={username} mono placeholder={qobuz ? "audiophile@example.com" : ""} disabled={busy} oninput={() => (erreur = null)} onenter={connect} />
           </FormField>
         {/if}
-        <FormField label={qobuz ? "Qobuz Token (user_auth_token)" : $t("servers.api_key")} for="srv_key" required>
+        <FormField label={qobuz ? $t("streaming.qobuz_token_label") : $t("servers.api_key")} for="srv_key" required>
           <FormInput id="srv_key" bind:value={apiKey} mono password disabled={busy} oninput={() => (erreur = null)} onenter={connect} />
         </FormField>
       </div>
     {:else}
       <div class="grid grid-cols-2 gap-4 max-sm:grid-cols-1">
-        <FormField label={qobuz ? "Qobuz Email or Username" : $t("servers.username")} for="srv_user" required>
+        <FormField label={qobuz ? $t("streaming.qobuz_user_label") : $t("servers.username")} for="srv_user" required>
           <FormInput id="srv_user" bind:value={username} mono placeholder={qobuz ? "audiophile@example.com" : ""} disabled={busy} oninput={() => (erreur = null)} onenter={connect} />
         </FormField>
         <FormField label={$t("servers.password")} for="srv_pw" required={!jellyfin}>
@@ -332,13 +343,9 @@
       <p class="flex-1 min-w-60 flex gap-2 text-xs leading-relaxed text-(--rg-mu)">
         <Icon icon="material-symbols:lock-outline" width="15" class="shrink-0 mt-0.5" />
         {#if qobuz}
-          {avecCle
-            ? "Tip: You can paste your user_auth_token (or app_id:app_secret:user_auth_token) from an active play.qobuz.com session."
-            : "Your password is only used to request a Qobuz session token; it is never stored on disk."}
+          {$t(avecCle ? "streaming.qobuz_token_note" : "streaming.qobuz_pw_note")}
         {:else if tidal}
-          {avecCle
-            ? "Paste an existing TIDAL OAuth access_token or refresh_token. Refresh tokens renew automatically when expired."
-            : "OAuth Device Flow stores only session tokens and never asks for your TIDAL password."}
+          {$t(avecCle ? "streaming.tidal_token_note" : "streaming.tidal_oauth_note")}
         {:else}
           {$t(`servers.${avecCle ? "api_key_note" : "password_note"}${jellyfin ? "_jellyfin" : ""}`)}
         {/if}
@@ -346,16 +353,10 @@
       <button type="button" onclick={() => { stopTidalPoll(); tidalAuth = null; avecCle = !avecCle; erreur = null; }}
               class="text-xs font-semibold cursor-pointer text-(--rg-gtx) hover:underline underline-offset-2">
         {qobuz
-          ? avecCle
-            ? "Use email & password"
-            : "Use token (user_auth_token)"
+          ? $t(avecCle ? "streaming.use_email_pw" : "streaming.use_user_token")
           : tidal
-            ? avecCle
-              ? "Use Browser OAuth Login"
-              : "Use token (access / refresh)"
-            : avecCle
-              ? $t("servers.use_password")
-            : $t("servers.use_api_key")}
+            ? $t(avecCle ? "streaming.use_oauth" : "streaming.use_tidal_token")
+            : $t(avecCle ? "servers.use_password" : "servers.use_api_key")}
       </button>
     </div>
     {/if}

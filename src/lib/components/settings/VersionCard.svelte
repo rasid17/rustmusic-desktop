@@ -20,7 +20,7 @@
     <p class="text-[13px] font-semibold text-(--rg-tx) truncate">RustMusic {__APP_VERSION__} {$t("settings.beta")}</p>
     <p class="text-xs truncate {installer ? 'text-(--rg-gtx)' : 'text-(--rg-mu)'}" title={statut}>{statut}</p>
   </div>
-  {#if !$platformFeatures.flatpak}
+  {#if $platformFeatures.updater_supported && !$platformFeatures.flatpak}
   <button
     type="button"
     class="shrink-0 h-7.5 px-2.5 rounded-lg text-xs font-semibold cursor-pointer transition-colors

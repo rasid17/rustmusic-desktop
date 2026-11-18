@@ -1,6 +1,6 @@
 import { writable, get } from "svelte/store";
 import { invoke } from "@tauri-apps/api/core";
-import { listen } from "@tauri-apps/api/event";
+import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 
 /** Un morceau d'un serveur gardé hors ligne. */
 export type OfflineItem = { path: string; server_id: number; ready: boolean; size: number | null };
@@ -31,6 +31,8 @@ async function load() {
 }
 
 let started = false;
+let gen = 0;
+let unlisten: UnlistenFn | null = null;
 // Plusieurs morceaux arrivent d'affilée : un seul rechargement par rafale.
 let reload: ReturnType<typeof setTimeout> | null = null;
 
@@ -42,11 +44,34 @@ export const offlineStore = {
   init() {
     if (started) return;
     started = true;
+    const myGen = ++gen;
     void load();
     void listen("offline-changed", () => {
       if (reload) clearTimeout(reload);
-      reload = setTimeout(() => void load(), 250);
+      reload = setTimeout(() => {
+        reload = null;
+        void load();
+      }, 250);
+    }).then((off) => {
+      if (myGen !== gen) {
+        off();
+        return;
+      }
+      unlisten = off;
     });
+  },
+
+  destroy() {
+    gen++;
+    started = false;
+    if (reload) {
+      clearTimeout(reload);
+      reload = null;
+    }
+    if (unlisten) {
+      unlisten();
+      unlisten = null;
+    }
   },
 
   isReady: (path: string | null | undefined) => !!path && get(writer).ready.has(path),

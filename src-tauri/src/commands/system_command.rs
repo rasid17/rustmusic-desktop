@@ -114,6 +114,12 @@ pub async fn set_dmabuf_mode(
     SettingsRepository::set(&state.pool, crate::core::render_mode::DMABUF_KEY, mode)
         .await
         .map_err(|e| format!("save {}: {e}", crate::core::render_mode::DMABUF_KEY))?;
+    let render_raw = SettingsRepository::get(&state.pool, KEY).await.ok().flatten();
+    crate::core::render_mode::save_early_prefs(
+        RenderMode::parse_or_auto(render_raw.as_deref()),
+        mode,
+        read_gpu_boot_failed(&state).await,
+    );
     log::info!("🖥  DMA-BUF : réglage {mode} (effectif au prochain démarrage)");
     get_render_mode(state).await
 }
@@ -132,13 +138,15 @@ pub async fn set_render_mode(
     SettingsRepository::set(&state.pool, gpu_sentinel::GPU_BOOT_FAILED_KEY, "0")
         .await
         .map_err(|e| format!("save {}: {e}", gpu_sentinel::GPU_BOOT_FAILED_KEY))?;
+    let dmabuf = read_dmabuf_mode(&state).await;
+    crate::core::render_mode::save_early_prefs(mode, &dmabuf, false);
     log::info!("🖥  Render mode updated : {:?} (effective at next restart)", mode);
     Ok(RenderModeStatus {
         mode,
         virt_kind: detect_virt_kind(),
         steamos: detect_steamos(),
         gpu_boot_failed: false,
-        dmabuf_mode: read_dmabuf_mode(&state).await,
+        dmabuf_mode: dmabuf,
         dmabuf_active: crate::core::render_mode::dmabuf_active(),
         nvidia: detect_nvidia(),
     })
@@ -155,6 +163,13 @@ pub async fn notify_ui_ready(state: State<'_, AppState>) -> Result<(), String> {
         SettingsRepository::set(&state.pool, gpu_sentinel::GPU_BOOT_FAILED_KEY, "0")
             .await
             .map_err(|e| format!("save {}: {e}", gpu_sentinel::GPU_BOOT_FAILED_KEY))?;
+        let render_raw = SettingsRepository::get(&state.pool, KEY).await.ok().flatten();
+        let dmabuf = read_dmabuf_mode(&state).await;
+        crate::core::render_mode::save_early_prefs(
+            RenderMode::parse_or_auto(render_raw.as_deref()),
+            &dmabuf,
+            false,
+        );
         log::info!("🖥  GPU boot confirmed OK → clearing remembered GPU failure");
     }
     Ok(())
@@ -218,14 +233,13 @@ pub fn set_compact_window_size(
                         if let Some(enfant) = gtk_window.child() {
                             enfant.set_size_request(w, h);
                         }
-                        if (w != cw || h != ch) && gtk_window.is_visible() {
+                        if (w != cw || h != ch)
+                            && gtk_window.is_visible()
+                            && crate::core::window_geometry::is_wayland()
+                        {
                             // Wayland : le compositeur n'adopte une taille
-                            // nouvelle qu'à la faveur d'une re-mappe (ou d'un
-                            // geste de l'utilisateur). On re-mappe donc — d'où
-                            // un seul saut de taille côté interface, jamais une
-                            // animation. La position est remise telle quelle :
-                            // sans effet sous Wayland (le compositeur décide),
-                            // précieuse sous X11.
+                            // nouvelle qu'à la faveur d'une re-mappe. On évite
+                            // le hide/present sous X11 pour supprimer le flicker.
                             let (px, py) = gtk_window.position();
                             gtk_window.hide();
                             gtk_window.present();

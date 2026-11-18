@@ -1,6 +1,6 @@
 import { writable, get } from "svelte/store";
 import { invoke } from "@tauri-apps/api/core";
-import { listen } from "@tauri-apps/api/event";
+import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { profilSelector } from "#lib/stores/profil/profil.store";
 import { toasts } from "#lib/stores/ui/toast.store";
 import { t } from "#lib/i18n";
@@ -17,19 +17,35 @@ const podcastWriter = writable<PodcastState>({ podcasts: [], loaded: false, prof
 
 const currentProfileId = () => get(profilSelector).profilSelected?.id ?? null;
 
-let ecoute: Promise<unknown> | null = null;
+let ecoute: Promise<void> | null = null;
+let unlisteners: UnlistenFn[] = [];
+let listenGen = 0;
 // Seule la dernière demande s'applique (changement de profil rapide).
 let loadSeq = 0;
 let inflight: { profilId: number; promise: Promise<void> } | null = null;
+
+function ensureListeners() {
+  if (ecoute) return;
+  const gen = ++listenGen;
+  ecoute = Promise.all([
+    listen("podcasts-updated", () => load()),
+    listen<string>("podcast-error", (e) => toasts.push({ type: "error", title: get(t)("podcasts.error_play"), message: e.payload })),
+  ]).then((offs) => {
+    if (gen !== listenGen) {
+      offs.forEach((f) => f());
+      return;
+    }
+    unlisteners = offs;
+  }).catch(() => {
+    ecoute = null;
+  });
+}
 
 async function load(profilId = currentProfileId()) {
   if (profilId == null) return;
   const seq = ++loadSeq;
   // La vérification de fond prévient quand des épisodes paraissent ; la lecture, quand un épisode ne vient pas.
-  ecoute ??= Promise.all([
-    listen("podcasts-updated", () => load()),
-    listen<string>("podcast-error", (e) => toasts.push({ type: "error", title: get(t)("podcasts.error_play"), message: e.payload })),
-  ]);
+  ensureListeners();
   try {
     const podcasts = await invoke<PodcastView[]>("get_podcasts", { profilId });
     if (seq === loadSeq) podcastWriter.set({ podcasts, loaded: true, profilId });
@@ -77,7 +93,7 @@ export const podcastStore = {
   /** Abonne le profil courant ; renvoie le podcast (déjà suivi : le même). */
   async follow(url: string): Promise<PodcastView> {
     const profilId = currentProfileId();
-    if (profilId == null) throw new Error("aucun profil");
+    if (profilId == null) throw new Error(get(t)("common.no_profile"));
     const p = await invoke<PodcastView>("podcast_subscribe", { profilId, url });
     podcastWriter.update((s) => ({ ...s, podcasts: [p, ...s.podcasts.filter((x) => x.id !== p.id)] }));
     return p;
@@ -118,5 +134,12 @@ export const podcastStore = {
     const added = await invoke<number>("podcast_refresh", { podcastId: null });
     await load();
     return added;
+  },
+
+  destroy() {
+    listenGen++;
+    ecoute = null;
+    unlisteners.forEach((f) => f());
+    unlisteners = [];
   },
 };

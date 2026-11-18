@@ -146,7 +146,7 @@ impl PodcastRepository {
         etag: Option<&str>,
         last_modified: Option<&str>,
     ) -> Result<i64, sqlx::Error> {
-        let mut tx = pool.begin().await?;
+        let mut tx = pool.begin_with("BEGIN IMMEDIATE").await?;
         let id: i64 = sqlx::query_scalar(
             "INSERT INTO podcasts (profil_id, feed_url, title, author, description, image_url, link, language, etag, last_modified, checked_at)
              VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP) RETURNING id",
@@ -186,7 +186,7 @@ impl PodcastRepository {
             .await?
             .into_iter()
             .collect();
-        let mut tx = pool.begin().await?;
+        let mut tx = pool.begin_with("BEGIN IMMEDIATE").await?;
         sqlx::query(
             "UPDATE podcasts SET title = ?, author = ?, description = ?, image_url = ?, link = ?, language = ?,
              etag = ?, last_modified = ?, checked_at = CURRENT_TIMESTAMP WHERE id = ?",
@@ -303,7 +303,7 @@ impl PodcastRepository {
             .into_iter()
             .map(|p| p.to_lowercase())
             .collect();
-        let mut tx = pool.begin().await?;
+        let mut tx = pool.begin_with("BEGIN IMMEDIATE").await?;
         for (id, title, published, url, mime) in rows {
             let mut path = download::episode_path(&podcast, published.as_deref(), &title, &url, mime.as_deref(), None);
             if taken.contains(&path.to_string_lossy().to_lowercase()) {

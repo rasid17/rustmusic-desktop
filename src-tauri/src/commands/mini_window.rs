@@ -9,9 +9,20 @@
 //! elle réapparaît dès que celui-ci se ferme, y compris brutalement
 //! (compositeur, Alt+F4) grâce à l'événement `mini-window-closed`.
 
+use std::sync::atomic::{AtomicBool, Ordering};
+
 use tauri::{AppHandle, Emitter, Manager, WebviewUrl, WebviewWindowBuilder};
 
 pub const MINI_LABEL: &str = "mini";
+static ALLOW_EXIT: AtomicBool = AtomicBool::new(false);
+
+pub fn allow_exit() {
+    ALLOW_EXIT.store(true, Ordering::SeqCst);
+}
+
+pub fn is_exit_allowed() -> bool {
+    ALLOW_EXIT.load(Ordering::SeqCst)
+}
 /// Titre reconnu par les compositeurs pour l'image-dans-l'image (flottant par défaut dans niri).
 const MINI_TITLE: &str = "Picture-in-Picture";
 /// Taille initiale ; la hauteur réelle est mesurée puis appliquée par l'interface.
@@ -35,6 +46,7 @@ pub fn open_mini_window(app: AppHandle, pinned: bool) -> Result<(), String> {
         .resizable(true)
         .decorations(false)
         .transparent(true)
+        .shadow(false)
         .always_on_top(pinned)
         .skip_taskbar(true)
         // Créée cachée : l'interface l'affiche une fois peinte et dimensionnée, sans flash blanc.
@@ -52,6 +64,9 @@ pub fn open_mini_window(app: AppHandle, pinned: bool) -> Result<(), String> {
     let win_for_event = window.clone();
     window.on_window_event(move |event| match event {
         tauri::WindowEvent::CloseRequested { api, .. } => {
+            if ALLOW_EXIT.load(Ordering::SeqCst) {
+                return;
+            }
             api.prevent_close();
             let _ = win_for_event.hide();
             let _ = handle.emit_to(MINI_LABEL, "mini-suspend", ());

@@ -45,14 +45,20 @@ let originalTracks: QueueTrack[] | null = null;
 let numeroEcriture = 0;
 let ecritures: Promise<void> = Promise.resolve();
 
+const ecritureParProfil = new Map<typeof currentProfilId, number>();
+let initSeq = 0;
+let inFlightInit: { profilId: typeof currentProfilId; seq: number; promise: Promise<void> } | null = null;
+
 function enregistrerFile(liste: QueueTrack[], currentIndex: number) {
+    const profilId = currentProfilId;
     const numero = ++numeroEcriture;
+    ecritureParProfil.set(profilId, numero);
 
     ecritures = ecritures.then(async () => {
-        if (numero !== numeroEcriture) return;
+        if (ecritureParProfil.get(profilId) !== numero) return;
         try {
-            await invoke('replace_queue_tracks', { profilId: currentProfilId, payload: liste });
-            await invoke('update_queue_state_index', { profilId: currentProfilId, currentIndex });
+            await invoke('replace_queue_tracks', { profilId, payload: liste });
+            await invoke('update_queue_state_index', { profilId, currentIndex });
         } catch (err) {
             console.error("❌ Erreur SQLite lors du chargement de la file :", err);
         }
@@ -80,15 +86,33 @@ export const queueState = {
 
     // 1. Initialisation (à appeler dans le onMount de ton layout principal)
     init: async () => {
-        try {
-            // On demande à Rust de lire SQLite
-            const stateFromDb = await invoke<QueueState>('get_queue', { profilId: currentProfilId });
-
-            queueStateWritable.set(stateFromDb);
-        } catch (err) {
-            console.error("❌ Impossible de charger la file d'attente :", err);
-            queueStateWritable.set(defaultState); // Fallback propre
+        const requestedProfilId = currentProfilId;
+        if (inFlightInit && inFlightInit.profilId === requestedProfilId) {
+            return inFlightInit.promise;
         }
+        const seq = ++initSeq;
+        const promise = (async () => {
+            try {
+                await ecritures;
+                if (seq !== initSeq || requestedProfilId !== currentProfilId) return;
+                // On demande à Rust de lire SQLite
+                const stateFromDb = await invoke<QueueState>('get_queue', { profilId: requestedProfilId });
+                if (seq !== initSeq || requestedProfilId !== currentProfilId) return;
+
+                queueStateWritable.set(stateFromDb);
+            } catch (err) {
+                console.error("❌ Impossible de charger la file d'attente :", err);
+                if (seq === initSeq && requestedProfilId === currentProfilId) {
+                    queueStateWritable.set(defaultState); // Fallback propre
+                }
+            } finally {
+                if (inFlightInit?.seq === seq) {
+                    inFlightInit = null;
+                }
+            }
+        })();
+        inFlightInit = { profilId: requestedProfilId, seq, promise };
+        return promise;
     },
 
     // Fenêtre du mini-lecteur : remplace l'état reçu de la fenêtre principale,

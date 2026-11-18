@@ -76,10 +76,35 @@ pub struct PlatformFeatures {
     /// Mises à jour et lancement au démarrage passent par Flathub et ses portails.
     pub flatpak: bool,
     pub exclusive: bool,
+    /// Vrai sous session Wayland (position de fenêtre imposée par le compositeur).
+    pub wayland: bool,
+    /// Vrai si l'auto-updater intégré est adapté à ce paquet (.AppImage / Windows).
+    pub updater_supported: bool,
+}
+
+pub fn updater_supported() -> bool {
+    #[cfg(target_os = "linux")]
+    {
+        if flatpak_id().is_some() {
+            return false;
+        }
+        // Sous Linux, seul l'AppImage (APPIMAGE défini) peut s'auto-remplacer ;
+        // les paquets .deb / .rpm / Arch sont gérés par le gestionnaire système.
+        std::env::var_os("APPIMAGE").is_some()
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        true
+    }
 }
 
 pub fn features() -> PlatformFeatures {
-    PlatformFeatures { flatpak: flatpak_id().is_some(), exclusive: exclusive_possible() }
+    PlatformFeatures {
+        flatpak: flatpak_id().is_some(),
+        exclusive: exclusive_possible(),
+        wayland: crate::core::window_geometry::is_wayland(),
+        updater_supported: updater_supported(),
+    }
 }
 
 /// Lancement à l'ouverture de session, demandé au portail « Background » : le fichier
@@ -87,10 +112,29 @@ pub fn features() -> PlatformFeatures {
 #[cfg(target_os = "linux")]
 pub fn request_autostart(enable: bool) -> Result<(), String> {
     use std::collections::HashMap;
-    use zbus::zvariant::Value;
+    use zbus::blocking::{Connection, Proxy};
+    use zbus::zvariant::{OwnedValue, Value};
 
-    let conn = zbus::blocking::Connection::session().map_err(|e| format!("session D-Bus : {e}"))?;
+    let conn = Connection::session().map_err(|e| format!("session D-Bus : {e}"))?;
+    let handle_token = format!("rustmusic_{}", uuid::Uuid::new_v4().simple());
+    let sender = conn
+        .unique_name()
+        .map(|u| u.as_str().trim_start_matches(':').replace('.', "_"))
+        .unwrap_or_default();
+    let request_path = format!("/org/freedesktop/portal/desktop/request/{sender}/{handle_token}");
+    let req_proxy = Proxy::new(
+        &conn,
+        "org.freedesktop.portal.Desktop",
+        request_path.as_str(),
+        "org.freedesktop.portal.Request",
+    )
+    .map_err(|e| format!("portail Request : {e}"))?;
+    let mut signals = req_proxy
+        .receive_signal("Response")
+        .map_err(|e| format!("abonnement Response : {e}"))?;
+
     let mut options: HashMap<&str, Value> = HashMap::new();
+    options.insert("handle_token", Value::from(handle_token));
     options.insert("reason", Value::from("RustMusic au démarrage de la session"));
     options.insert("autostart", Value::from(enable));
     options.insert("commandline", Value::from(vec!["rustmusic"]));
@@ -102,6 +146,23 @@ pub fn request_autostart(enable: bool) -> Result<(), String> {
         &("", options),
     )
     .map_err(|e| format!("portail Background : {e}"))?;
+
+    if let Some(msg) = signals.next() {
+        let (code, results): (u32, HashMap<String, OwnedValue>) = msg
+            .body()
+            .deserialize()
+            .map_err(|e| format!("réponse portail illisible : {e}"))?;
+        if code != 0 {
+            return Err("Autorisation de démarrage refusée par l'utilisateur".into());
+        }
+        if enable {
+            if let Some(val) = results.get("autostart") {
+                if matches!(val.downcast_ref::<bool>(), Ok(false)) {
+                    return Err("Le système a refusé le démarrage automatique".into());
+                }
+            }
+        }
+    }
     Ok(())
 }
 

@@ -148,31 +148,56 @@ pub fn restore_all() {
 pub fn restore_pending() {
     let Some(path) = marker_path() else { return };
     let Ok(content) = std::fs::read_to_string(&path) else { return };
+    let mut remaining = Vec::new();
     for line in content.lines() {
-        if let Some((device, profile)) = line.split_once('\t') {
-            restore_profile(&Restore { device: device.to_string(), profile: profile.to_string() });
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        if let Some((device, profile)) = trimmed.split_once('\t') {
+            if !restore_profile(&Restore {
+                device: device.to_string(),
+                profile: profile.to_string(),
+            }) {
+                remaining.push(trimmed.to_string());
+            }
         }
     }
-    let _ = std::fs::remove_file(&path);
+    write_marker(&remaining);
 }
 
-fn restore_profile(restore: &Restore) {
-    match read_cards() {
-        Ok(cards) => match cards.into_iter().map(|c| c.1).find(|c| c.device == restore.device) {
-            // Profil changé entre-temps ou carte débranchée : on n'y touche pas.
-            Some(card) if card.profile == PROFILE_OFF => match apply_profile(&card, &restore.profile) {
-                Ok(()) => log::info!(
+/// Tente de rendre la carte à PipeWire. Retourne `true` si la carte est rétablie
+/// (ou n'a plus besoin de l'être) et peut donc être retirée du témoin disque.
+fn restore_profile(restore: &Restore) -> bool {
+    let cards = match read_cards() {
+        Ok(c) => c,
+        Err(e) => {
+            log::warn!("🔓 Profil de {} non rétabli : {e}", restore.device);
+            return false;
+        }
+    };
+    let restored = match cards.into_iter().map(|c| c.1).find(|c| c.device == restore.device) {
+        // Profil changé entre-temps ou carte débranchée : rien à rétablir.
+        Some(card) if card.profile == PROFILE_OFF => match apply_profile(&card, &restore.profile) {
+            Ok(()) => {
+                log::info!(
                     "🔓 Carte audio rendue à PipeWire ({}, profil « {} »)",
                     restore.device,
                     restore.profile
-                ),
-                Err(e) => log::warn!("🔓 Profil de {} non rétabli : {e}", restore.device),
-            },
-            _ => {}
+                );
+                true
+            }
+            Err(e) => {
+                log::warn!("🔓 Profil de {} non rétabli : {e}", restore.device);
+                false
+            }
         },
-        Err(e) => log::warn!("🔓 Profil de {} non rétabli : {e}", restore.device),
+        _ => true,
+    };
+    if restored {
+        forget(&restore.device);
     }
-    forget(&restore.device);
+    restored
 }
 
 fn dump_objects() -> Result<Vec<Value>, String> {

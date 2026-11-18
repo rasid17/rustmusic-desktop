@@ -178,10 +178,30 @@ fn explain(error: io::Error) -> io::Error {
 pub fn write_in_place(target: &Path, offset: u64, data: &[u8]) -> io::Result<()> {
     use std::io::{Seek, SeekFrom};
 
-    let mut file = fs::OpenOptions::new().write(true).open(target)?;
-    file.seek(SeekFrom::Start(offset))?;
-    file.write_all(data)?;
-    file.sync_all()
+    let original = fs::metadata(target).map(|m| m.permissions()).ok();
+    let was_readonly = original.as_ref().is_some_and(|p| p.readonly());
+    if was_readonly {
+        if let Some(ref perms) = original {
+            let mut writable = perms.clone();
+            writable.set_readonly(false);
+            let _ = fs::set_permissions(target, writable);
+        }
+    }
+
+    let result = (|| -> io::Result<()> {
+        let mut file = fs::OpenOptions::new().write(true).open(target)?;
+        file.seek(SeekFrom::Start(offset))?;
+        file.write_all(data)?;
+        file.sync_all()
+    })();
+
+    if was_readonly {
+        if let Some(perms) = original {
+            let _ = fs::set_permissions(target, perms);
+        }
+    }
+
+    result
 }
 
 /// Chemin du fichier temporaire, dans le dossier de la cible.

@@ -59,10 +59,17 @@ pub struct StreamFormat {
     pub source_rate: u32,
     /// Canaux du fichier source.
     pub source_channels: usize,
+    /// Profondeur de bits source si connue (`Some(16)`, `Some(24)`…).
+    pub source_bits: Option<u32>,
     /// Fréquence de sortie effective du stream ouvert.
     pub output_rate: u32,
     /// Canaux de sortie effectifs du stream ouvert.
     pub output_channels: u16,
+    /// Profondeur exacte négociée par le backend audio (`16`, `24`, `32`).
+    pub output_bits: u32,
+    /// `true` sur backend exclusif (WASAPI / ALSA / CoreAudio) : exige la même
+    /// profondeur de bits pour préserver le bit-perfect et la négociation DAC.
+    pub is_exclusive: bool,
 }
 
 /// Une piste décodée, prête à être promue.
@@ -317,9 +324,15 @@ fn decode_track(
     is_stopped: &AtomicBool,
     generation: u64,
 ) -> Result<Option<PreloadedTrack>, String> {
+    let cue_slice = crate::core::cue::parse_cue_uri(&path.to_string_lossy());
+    let physical_path = cue_slice
+        .as_ref()
+        .map(|s| s.real_path.as_path())
+        .unwrap_or(path);
+
     let mut hint = Hint::new();
     // Morceau distant : son fichier du cache (attendu s'il arrive encore).
-    let mss = match crate::core::subsonic::stream::open(path) {
+    let mss = match crate::core::subsonic::stream::open(physical_path) {
         Some(remote) => {
             let (source, ext) = remote.map_err(|e| format!("ouverture : {e}"))?;
             if let Some(ext) = ext {
@@ -328,8 +341,8 @@ fn decode_track(
             MediaSourceStream::new(source, Default::default())
         }
         None => {
-            let file = std::fs::File::open(path).map_err(|e| format!("ouverture : {e}"))?;
-            if let Some(ext) = path.extension().and_then(|e| e.to_str()) {
+            let file = std::fs::File::open(physical_path).map_err(|e| format!("ouverture : {e}"))?;
+            if let Some(ext) = physical_path.extension().and_then(|e| e.to_str()) {
                 hint.with_extension(ext);
             }
             MediaSourceStream::new(Box::new(file), Default::default())
@@ -364,6 +377,7 @@ fn decode_track(
         .ok_or("aucune piste audio")?;
 
     let track_id = track.id;
+    let time_base = track.time_base;
     let codec_params = track
         .codec_params
         .as_ref()
@@ -377,6 +391,7 @@ fn decode_track(
         .as_ref()
         .ok_or("pas d'info canaux")?
         .count();
+    let track_bits = crate::core::audio_player::pipeline_info::source_bit_depth(&codec_params);
 
     // Exigence de format : un écart imposerait un rééchantillonnage silencieux,
     // donc la perte du bit-perfect. On préfère renoncer à l'enchaînement.
@@ -391,9 +406,34 @@ fn decode_track(
         );
         return Ok(None);
     }
+    if fmt.is_exclusive
+        && (track_bits != fmt.source_bits
+            || track_bits.is_some_and(|b| b > fmt.output_bits))
+    {
+        log::info!(
+            "⏭  Pas d'enchaînement exclusif : {} ({:?}-bit) incompatible avec la session ({:?}-bit, DAC {}-bit)",
+            path.display(),
+            track_bits,
+            fmt.source_bits,
+            fmt.output_bits
+        );
+        return Ok(None);
+    }
 
-    // Estimation de l'empreinte avant de décoder quoi que ce soit.
-    let duration_secs = estimate_duration(&reader, track_id, source_rate);
+    // Estimation de l'empreinte avant de décoder quoi que ce soit (tranche CUE incluse).
+    let file_duration_secs = estimate_duration(&reader, track_id, source_rate);
+    let slice_start_secs = cue_slice.as_ref().map(|s| s.start_secs.max(0.0)).unwrap_or(0.0);
+    let slice_end_secs = cue_slice.as_ref().and_then(|s| s.end_secs).map(|e| {
+        if file_duration_secs > 0.0 {
+            e.min(file_duration_secs)
+        } else {
+            e
+        }
+    });
+    let duration_secs = match slice_end_secs {
+        Some(end) => (end - slice_start_secs).max(0.0),
+        None => (file_duration_secs - slice_start_secs).max(0.0),
+    };
     let estimated_bytes =
         (duration_secs * fmt.output_rate as f64 * fmt.output_channels as f64 * 4.0) as usize;
     if estimated_bytes > MAX_PRELOAD_BYTES {
@@ -405,6 +445,42 @@ fn decode_track(
         );
         return Ok(None);
     }
+
+    let mut cur_src_frame: u64 = if slice_start_secs > 0.0 {
+        if let Some(time) = symphonia::core::units::Time::try_from_secs_f64(slice_start_secs) {
+            match reader.seek(
+                symphonia::core::formats::SeekMode::Coarse,
+                symphonia::core::formats::SeekTo::Time {
+                    time,
+                    track_id: Some(track_id),
+                },
+            ) {
+                Ok(seeked) => {
+                    let secs = time_base
+                        .and_then(|tb| tb.calc_time(seeked.actual_ts))
+                        .map(|t| t.as_secs_f64())
+                        .unwrap_or_else(|| {
+                            seeked.actual_ts.get().max(0) as f64 / source_rate as f64
+                        });
+                    (secs.max(0.0) * source_rate as f64).round() as u64
+                }
+                Err(e) => {
+                    log::debug!(
+                        "📦 Seek CUE repli séquentiel ({}) : {e:?}",
+                        path.display()
+                    );
+                    0
+                }
+            }
+        } else {
+            0
+        }
+    } else {
+        0
+    };
+    let start_src_frame: u64 = (slice_start_secs * source_rate as f64).round() as u64;
+    let end_src_frame: Option<u64> =
+        slice_end_secs.map(|e| (e * source_rate as f64).round() as u64);
 
     let mut decoder: Box<dyn AudioDecoder> = crate::core::audio_player::codecs::codec_registry()
         .make_audio_decoder(&codec_params, &AudioDecoderOptions::default())
@@ -444,13 +520,37 @@ fn decode_track(
         };
 
         let decoded = convert_audio_buffer_to_interleaved(&buf, channels);
-        if decoded.is_empty() {
+        let pkt_frames = (decoded.len() / channels) as u64;
+        if pkt_frames == 0 {
             continue;
         }
+        let pkt_start = cur_src_frame;
+        let pkt_end = pkt_start.saturating_add(pkt_frames);
+        cur_src_frame = pkt_end;
+
+        if pkt_end <= start_src_frame {
+            continue;
+        }
+        let skip_frames = start_src_frame.saturating_sub(pkt_start) as usize;
+        let mut reached_slice_end = false;
+        let take_end_frames = match end_src_frame {
+            Some(end_f) if pkt_end >= end_f => {
+                reached_slice_end = true;
+                end_f.saturating_sub(pkt_start) as usize
+            }
+            _ => pkt_frames as usize,
+        };
+        if take_end_frames <= skip_frames {
+            if reached_slice_end {
+                break;
+            }
+            continue;
+        }
+        let sliced = &decoded[skip_frames * channels..take_end_frames * channels];
 
         let resampled = match resampler.as_mut() {
-            Some(rs) => rs.process_interleaved(&decoded),
-            None => decoded,
+            Some(rs) => rs.process_interleaved(sliced),
+            None => sliced.to_vec(),
         };
 
         if channels as u16 != fmt.output_channels {
@@ -460,6 +560,10 @@ fn decode_track(
             samples.extend_from_slice(&out);
         } else {
             samples.extend_from_slice(&resampled);
+        }
+
+        if reached_slice_end {
+            break;
         }
 
         // Garde-fou : une durée mal estimée ne doit pas faire exploser la RAM.
@@ -517,4 +621,79 @@ fn estimate_duration(reader: &Box<dyn FormatReader>, track_id: u32, source_rate:
         .num_frames
         .map(|n| n as f64 / source_rate as f64)
         .unwrap_or(0.0)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn write_pcm_wav(path: &Path, sample_rate: u32, channels: u16, total_frames: u32) {
+        let data_bytes = total_frames * channels as u32 * 2;
+        let riff_size = 36 + data_bytes;
+        let mut buf = Vec::with_capacity(44 + data_bytes as usize);
+        buf.extend_from_slice(b"RIFF");
+        buf.extend_from_slice(&riff_size.to_le_bytes());
+        buf.extend_from_slice(b"WAVEfmt ");
+        buf.extend_from_slice(&16u32.to_le_bytes());
+        buf.extend_from_slice(&1u16.to_le_bytes()); // PCM
+        buf.extend_from_slice(&channels.to_le_bytes());
+        buf.extend_from_slice(&sample_rate.to_le_bytes());
+        let byte_rate = sample_rate * channels as u32 * 2;
+        buf.extend_from_slice(&byte_rate.to_le_bytes());
+        let block_align = channels * 2;
+        buf.extend_from_slice(&block_align.to_le_bytes());
+        buf.extend_from_slice(&16u16.to_le_bytes());
+        buf.extend_from_slice(b"data");
+        buf.extend_from_slice(&data_bytes.to_le_bytes());
+        for i in 0..(total_frames * channels as u32) {
+            let sample = ((i % 256) as i16).wrapping_mul(64);
+            buf.extend_from_slice(&sample.to_le_bytes());
+        }
+        std::fs::write(path, buf).unwrap();
+    }
+
+    #[test]
+    fn cue_uri_preloads_only_requested_track_slice() {
+        let dir = std::env::temp_dir().join(format!(
+            "rustmusic-preload-cue-{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let wav_path = dir.join("disc.wav");
+        let cue_path = dir.join("disc.cue");
+        write_pcm_wav(&wav_path, 44_100, 2, 44_100 * 3);
+        let cue = "TITLE \"Test Album\"\nFILE \"disc.wav\" WAVE\n  TRACK 01 AUDIO\n    TITLE \"First\"\n    INDEX 01 00:00:00\n  TRACK 02 AUDIO\n    TITLE \"Second\"\n    INDEX 01 00:01:00\n  TRACK 03 AUDIO\n    TITLE \"Third\"\n    INDEX 01 00:02:00\n";
+        std::fs::write(&cue_path, cue).unwrap();
+
+        let uri = PathBuf::from(format!(
+            "cue://{}#track=2&start=1.000&end=2.000&cue={}",
+            wav_path.display(),
+            cue_path.display()
+        ));
+        let fmt = StreamFormat {
+            source_rate: 44_100,
+            source_channels: 2,
+            source_bits: Some(16),
+            output_rate: 44_100,
+            output_channels: 2,
+            output_bits: 16,
+            is_exclusive: false,
+        };
+        let stopped = AtomicBool::new(false);
+        let generation = GENERATION.load(Ordering::Relaxed);
+        let track = decode_track(&uri, fmt, &stopped, generation)
+            .expect("decode_track ok")
+            .expect("cue track preloaded");
+
+        assert_eq!(track.path, uri);
+        assert!(
+            (track.duration_secs - 1.0).abs() < 0.05,
+            "expected ~1.0s slice, got {}s",
+            track.duration_secs
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }

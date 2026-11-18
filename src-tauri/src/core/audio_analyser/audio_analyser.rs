@@ -75,6 +75,24 @@ impl AudioAnalyser {
                     audio_file.tags.year = Some(y.to_string());
                 }
             }
+            if audio_file
+                .tags
+                .album
+                .as_deref()
+                .map_or(true, |s| s.trim().is_empty())
+            {
+                if let Some(fallback_album) = cue_info
+                    .cue_path
+                    .as_ref()
+                    .or(Some(&cue_info.real_path))
+                    .and_then(|p| p.file_stem())
+                    .and_then(|s| s.to_str())
+                    .map(str::trim)
+                    .filter(|s| !s.is_empty())
+                {
+                    audio_file.tags.album = Some(fallback_album.to_string());
+                }
+            }
             return Ok(audio_file);
         }
 

@@ -104,3 +104,64 @@ pub fn set_software_active(actif: bool) {
 pub fn software_active() -> bool {
     LOGICIEL_ACTIF.load(std::sync::atomic::Ordering::Relaxed)
 }
+
+#[derive(Debug, Clone)]
+pub struct EarlyRenderPrefs {
+    pub mode: RenderMode,
+    pub dmabuf: String,
+    pub gpu_boot_failed: bool,
+}
+
+impl Default for EarlyRenderPrefs {
+    fn default() -> Self {
+        Self {
+            mode: RenderMode::Auto,
+            dmabuf: "auto".to_string(),
+            gpu_boot_failed: false,
+        }
+    }
+}
+
+fn early_prefs_path() -> Option<std::path::PathBuf> {
+    Some(
+        dirs::data_dir()?
+            .join("com.larevuegeek.rustmusic")
+            .join("render_prefs"),
+    )
+}
+
+/// Cache plaintext des préférences de rendu pour lecture avant l'initialisation
+/// SQLite et avant tout thread secondaire (Linux `std::env::set_var`).
+pub fn load_early_prefs() -> EarlyRenderPrefs {
+    let mut prefs = EarlyRenderPrefs::default();
+    let Some(path) = early_prefs_path() else {
+        return prefs;
+    };
+    let Ok(raw) = std::fs::read_to_string(path) else {
+        return prefs;
+    };
+    for line in raw.lines() {
+        let Some((k, v)) = line.split_once('=') else { continue };
+        match k.trim() {
+            "render_mode" => prefs.mode = RenderMode::parse_or_auto(Some(v.trim())),
+            "dmabuf_mode" => prefs.dmabuf = dmabuf_mode(Some(v.trim())).to_string(),
+            "gpu_boot_failed" => prefs.gpu_boot_failed = v.trim() == "1",
+            _ => {}
+        }
+    }
+    prefs
+}
+
+pub fn save_early_prefs(mode: RenderMode, dmabuf: &str, gpu_boot_failed: bool) {
+    let Some(path) = early_prefs_path() else { return };
+    if let Some(parent) = path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    let content = format!(
+        "render_mode={}\ndmabuf_mode={}\ngpu_boot_failed={}\n",
+        mode.as_str(),
+        dmabuf_mode(Some(dmabuf)),
+        if gpu_boot_failed { "1" } else { "0" }
+    );
+    let _ = std::fs::write(path, content);
+}

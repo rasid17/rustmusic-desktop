@@ -93,8 +93,12 @@ pub fn open(path: &Path) -> Option<io::Result<Opened>> {
 
 /// Serveur retiré : ses téléchargements s'arrêtent, son cache est effacé.
 pub fn forget_server(server_id: i64) {
-    let dir = cache_dir().join(server_id.to_string());
-    let _ = std::fs::remove_dir_all(offline_dir().join(server_id.to_string()));
+    forget_server_in(&cache_dir(), &offline_dir(), server_id);
+}
+
+fn forget_server_in(cache_root: &Path, offline_root: &Path, server_id: i64) {
+    let dir = cache_root.join(server_id.to_string());
+    let _ = std::fs::remove_dir_all(offline_root.join(server_id.to_string()));
     let gone: Vec<PathBuf> = {
         let mut map = prepared().lock().unwrap_or_else(|e| e.into_inner());
         let files = map.values().filter(|f| f.starts_with(&dir)).cloned().collect();
@@ -192,14 +196,19 @@ mod tests {
 
     #[test]
     fn forgetting_a_server_clears_its_cache() {
-        let dir = cache_dir().join("987654");
+        let root = std::env::temp_dir().join(format!("rustmusic-forget-server-{}", std::process::id()));
+        let cache_root = root.join("cache");
+        let offline_root = root.join("offline");
+        let _ = std::fs::remove_dir_all(&root);
+        let dir = cache_root.join("987654");
         std::fs::create_dir_all(&dir).unwrap();
         let file = dir.join("s1.mp3");
         std::fs::write(&file, b"x").unwrap();
         register(Path::new("remote://987654/al/s1"), file);
-        forget_server(987654);
+        forget_server_in(&cache_root, &offline_root, 987654);
         assert!(!dir.exists());
         assert!(cached(Path::new("remote://987654/al/s1")).is_none());
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]

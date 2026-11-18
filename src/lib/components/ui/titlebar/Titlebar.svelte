@@ -65,11 +65,18 @@
     };
   });
 
-  function minimize() { appWindow.minimize(); }
-  function toggleMaximize() { appWindow.toggleMaximize(); }
+  function minimize(e?: MouseEvent) {
+    e?.stopPropagation();
+    void appWindow.minimize().catch((err) => console.error('[titlebar] minimize failed:', err));
+  }
+  function toggleMaximize(e?: MouseEvent) {
+    e?.stopPropagation();
+    void appWindow.toggleMaximize().catch((err) => console.error('[titlebar] maximize failed:', err));
+  }
 
   // Sur Mac, le vert passe en plein écran comme ailleurs dans le système ; ⌥ + clic agrandit.
   function handleGreenButton(e: MouseEvent) {
+    e.stopPropagation();
     if (osDetected !== 'macos' || e.altKey) toggleMaximize();
     else appWindow.isFullscreen().then((v) => appWindow.setFullscreen(!v)).catch(() => {});
   }
@@ -78,9 +85,10 @@
   function handleDoubleClick(e: MouseEvent) {
     if ((e.target as HTMLElement).hasAttribute('data-tauri-drag-region')) toggleMaximize();
   }
-  function close() {
-    if (minimizeToTray) appWindow.hide();
-    else appWindow.close();
+  function close(e?: MouseEvent) {
+    e?.stopPropagation();
+    const action = minimizeToTray ? appWindow.hide() : appWindow.close();
+    void action.catch((err) => console.error('[titlebar] close failed:', err));
   }
 </script>
 
@@ -113,6 +121,8 @@
 
 {#snippet miniPlayerButton(style: 'macos' | 'windows' | 'linux')}
   <button
+    type="button"
+    data-tauri-drag-region="false"
     class="cursor-pointer transition-colors
            {style === 'windows'
              ? 'flex items-center justify-center w-11 h-full text-neutral-500 dark:text-neutral-400 hover:bg-neutral-200/60 dark:hover:bg-white/8 hover:text-neutral-700 dark:hover:text-neutral-200'
@@ -121,16 +131,17 @@
                : 'flex items-center justify-center w-5 h-5 text-neutral-400 dark:text-neutral-500 hover:text-neutral-700 dark:hover:text-neutral-200'}"
     class:order-first={effectivePosition === 'right'}
     class:order-last={effectivePosition === 'left'}
-    onclick={() => toggleMiniPlayer()}
+    onclick={(e) => { e.stopPropagation(); void toggleMiniPlayer(); }}
     aria-label={$t('mini.enter')}
     title={$t('mini.enter')}
   >
-    <Icon icon="lucide:picture-in-picture-2" width={style === 'linux' ? 11 : 13} height={style === 'linux' ? 11 : 13} />
+    <span class="pointer-events-none flex items-center justify-center">
+      <Icon icon="lucide:picture-in-picture-2" width={style === 'linux' ? 11 : 13} height={style === 'linux' ? 11 : 13} />
+    </span>
   </button>
 {/snippet}
 
 <div
-  data-tauri-drag-region
   role="toolbar"
   tabindex="-1"
   class="relative z-30 flex items-center h-15 select-none shrink-0
@@ -172,7 +183,8 @@
   <!-- ─── Contrôles : aucun (compositeurs tuilés : seul le bouton mini-lecteur reste) ─── -->
   {#if effectiveStyle === 'none'}
     <div
-      class="flex items-center px-3 h-full"
+      data-tauri-drag-region="false"
+      class="relative z-20 shrink-0 flex items-center px-3 h-full"
       class:ml-auto={effectivePosition === 'right'}
       class:order-first={effectivePosition === 'left'}
     >
@@ -182,7 +194,8 @@
   <!-- ─── Contrôles : style macOS (traffic lights) ─── -->
   {:else if effectiveStyle === 'macos'}
     <div
-      class="flex items-center gap-2 px-4 h-full"
+      data-tauri-drag-region="false"
+      class="relative z-20 shrink-0 flex items-center gap-2 px-4 h-full"
       class:ml-auto={effectivePosition === 'right'}
       class:order-first={effectivePosition === 'left'}
     >
@@ -200,13 +213,16 @@
   <!-- ─── Contrôles : style Linux (boutons ronds Adwaita / GNOME) ─── -->
   {:else if effectiveStyle === 'linux'}
     <div
-      class="flex items-center gap-1.5 px-3 h-full"
+      data-tauri-drag-region="false"
+      class="relative z-20 shrink-0 flex items-center gap-1.5 px-3 h-full"
       class:ml-auto={effectivePosition === 'right'}
       class:order-first={effectivePosition === 'left'}
     >
       {@render miniPlayerButton('linux')}
       <!-- Minimize -->
       <button
+        type="button"
+        data-tauri-drag-region="false"
         class="flex items-center justify-center w-6 h-6 rounded-full cursor-pointer
                bg-neutral-200 dark:bg-white/10
                text-neutral-700 dark:text-neutral-300
@@ -215,13 +231,15 @@
         onclick={minimize}
         aria-label={$t("window.minimize")}
       >
-        <svg viewBox="0 0 12 12" width="9" height="9" fill="currentColor">
+        <svg viewBox="0 0 12 12" width="9" height="9" fill="currentColor" class="pointer-events-none">
           <rect x="2" y="5.5" width="8" height="1" />
         </svg>
       </button>
 
       <!-- Maximize / Restore -->
       <button
+        type="button"
+        data-tauri-drag-region="false"
         class="flex items-center justify-center w-6 h-6 rounded-full cursor-pointer
                bg-neutral-200 dark:bg-white/10
                text-neutral-700 dark:text-neutral-300
@@ -231,12 +249,12 @@
         aria-label={$t("window.maximize")}
       >
         {#if isMaximized}
-          <svg viewBox="0 0 12 12" width="9" height="9" fill="none" stroke="currentColor" stroke-width="1.2">
+          <svg viewBox="0 0 12 12" width="9" height="9" fill="none" stroke="currentColor" stroke-width="1.2" class="pointer-events-none">
             <rect x="2.5" y="3.5" width="6" height="6" />
             <path d="M4 3.5V2.5h6V8.5H8.5" />
           </svg>
         {:else}
-          <svg viewBox="0 0 12 12" width="9" height="9" fill="none" stroke="currentColor" stroke-width="1.2">
+          <svg viewBox="0 0 12 12" width="9" height="9" fill="none" stroke="currentColor" stroke-width="1.2" class="pointer-events-none">
             <rect x="2.5" y="2.5" width="7" height="7" />
           </svg>
         {/if}
@@ -244,6 +262,8 @@
 
       <!-- Close (rond rouge GNOME) -->
       <button
+        type="button"
+        data-tauri-drag-region="false"
         class="flex items-center justify-center w-6 h-6 rounded-full cursor-pointer
                bg-neutral-200 dark:bg-white/10
                text-[#5e625d] dark:text-neutral-300
@@ -252,7 +272,7 @@
         onclick={close}
         aria-label={$t("common.close")}
       >
-        <svg viewBox="0 0 12 12" width="9" height="9" fill="none" stroke="currentColor" stroke-width="1.2">
+        <svg viewBox="0 0 12 12" width="9" height="9" fill="none" stroke="currentColor" stroke-width="1.2" class="pointer-events-none">
           <path d="M2.5 2.5l7 7M9.5 2.5l-7 7" />
         </svg>
       </button>
@@ -261,13 +281,16 @@
   <!-- ─── Contrôles : style Windows (boutons rectangulaires) ─── -->
   {:else}
     <div
-      class="flex items-center h-full"
+      data-tauri-drag-region="false"
+      class="relative z-20 shrink-0 flex items-center h-full"
       class:ml-auto={effectivePosition === 'right'}
       class:order-first={effectivePosition === 'left'}
     >
       {@render miniPlayerButton('windows')}
       <!-- Minimize -->
       <button
+        type="button"
+        data-tauri-drag-region="false"
         class="flex items-center justify-center w-11 h-full cursor-pointer
                text-[#5e625d] dark:text-neutral-300
                hover:bg-[#e5e1d8] dark:hover:bg-white/8
@@ -275,13 +298,15 @@
         onclick={minimize}
         aria-label={$t("window.minimize")}
       >
-        <svg viewBox="0 0 12 12" width="12" height="12" fill="currentColor">
+        <svg viewBox="0 0 12 12" width="12" height="12" fill="currentColor" class="pointer-events-none">
           <rect x="2" y="5.5" width="8" height="1" />
         </svg>
       </button>
 
       <!-- Maximize / Restore -->
       <button
+        type="button"
+        data-tauri-drag-region="false"
         class="flex items-center justify-center w-11 h-full cursor-pointer
                text-[#5e625d] dark:text-neutral-300
                hover:bg-[#e5e1d8] dark:hover:bg-white/8
@@ -291,13 +316,13 @@
       >
         {#if isMaximized}
           <!-- Restore icon (2 squares) -->
-          <svg viewBox="0 0 12 12" width="11" height="11" fill="none" stroke="currentColor" stroke-width="1">
+          <svg viewBox="0 0 12 12" width="11" height="11" fill="none" stroke="currentColor" stroke-width="1" class="pointer-events-none">
             <rect x="2.5" y="3.5" width="6" height="6" />
             <path d="M4 3.5V2.5h6V8.5H8.5" />
           </svg>
         {:else}
           <!-- Maximize icon (single square) -->
-          <svg viewBox="0 0 12 12" width="11" height="11" fill="none" stroke="currentColor" stroke-width="1">
+          <svg viewBox="0 0 12 12" width="11" height="11" fill="none" stroke="currentColor" stroke-width="1" class="pointer-events-none">
             <rect x="2.5" y="2.5" width="7" height="7" />
           </svg>
         {/if}
@@ -305,6 +330,8 @@
 
       <!-- Close (hover rouge spécifique Windows) -->
       <button
+        type="button"
+        data-tauri-drag-region="false"
         class="flex items-center justify-center w-11 h-full cursor-pointer
                text-[#5e625d] dark:text-neutral-300
                hover:bg-red-500 hover:text-white
@@ -312,7 +339,7 @@
         onclick={close}
         aria-label={$t("common.close")}
       >
-        <svg viewBox="0 0 12 12" width="11" height="11" fill="none" stroke="currentColor" stroke-width="1.1">
+        <svg viewBox="0 0 12 12" width="11" height="11" fill="none" stroke="currentColor" stroke-width="1.1" class="pointer-events-none">
           <path d="M2.5 2.5l7 7M9.5 2.5l-7 7" />
         </svg>
       </button>

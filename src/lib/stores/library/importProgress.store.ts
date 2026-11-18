@@ -64,6 +64,7 @@ const initialState: ImportProgressState = {
 const importWriter = writable<ImportProgressState>(initialState);
 
 let unlisteners: UnlistenFn[] = [];
+let initGen = 0;
 let startTime = 0;
 let reset: ReturnType<typeof setTimeout> | undefined;
 
@@ -112,7 +113,19 @@ export const importProgressStore = {
   subscribe: importWriter.subscribe,
 
   init: async () => {
-    const u1 = await listen<Cible>('import-start', (event) => {
+    unlisteners.forEach(u => u());
+    unlisteners = [];
+    const gen = ++initGen;
+    const track = async <T>(event: string, handler: Parameters<typeof listen<T>>[1]): Promise<void> => {
+      const off = await listen<T>(event, handler);
+      if (gen !== initGen) {
+        off();
+        return;
+      }
+      unlisteners.push(off);
+    };
+
+    await track<Cible>('import-start', (event) => {
       watch(event.payload.library_id);
       startTime = Date.now();
       importWriter.set({
@@ -123,7 +136,7 @@ export const importProgressStore = {
       });
     });
 
-    const u2 = await listen<Cible & { found: number }>('import-listing', (event) => {
+    await track<Cible & { found: number }>('import-listing', (event) => {
       watch(event.payload.library_id);
       importWriter.update(state => ({
         ...state,
@@ -136,7 +149,7 @@ export const importProgressStore = {
       }));
     });
 
-    const u3 = await listen<ImportProgressPayload>('import-progress', (event) => {
+    await track<ImportProgressPayload>('import-progress', (event) => {
       if (startTime === 0) startTime = Date.now();
       watch(event.payload.library_id);
       importWriter.update(state => ({
@@ -155,7 +168,7 @@ export const importProgressStore = {
       }));
     });
 
-    const u4 = await listen<ImportCompletePayload>('import-complete', async (event) => {
+    await track<ImportCompletePayload>('import-complete', async (event) => {
       const { library_id, cancelled, removed } = event.payload;
       importWriter.update(state => ({
         ...state,
@@ -183,9 +196,7 @@ export const importProgressStore = {
     });
 
     // Un rescan arrêté pendant le listage n'émet pas `import-complete`.
-    const u5 = await listen('rescan-complete', finish);
-
-    unlisteners = [u1, u2, u3, u4, u5];
+    await track('rescan-complete', finish);
   },
 
   start: () => {
@@ -204,6 +215,9 @@ export const importProgressStore = {
   },
 
   destroy: () => {
+    initGen++;
+    clearTimeout(reset);
+    reset = undefined;
     unlisteners.forEach(u => u());
     unlisteners = [];
   }

@@ -17,8 +17,10 @@ const COLONNES: [(&str, &str); 7] = [
 /// Remplace `ancien` par `nouveau` en tête des chemins (le dossier lui-même et tout
 /// ce qu'il contient), en une transaction. Rend le nombre de fichiers déplacés.
 pub async fn relocate_prefix(pool: &SqlitePool, ancien: &str, nouveau: &str) -> Result<u64, String> {
-    let ancien = ancien.trim_end_matches('/');
-    let nouveau = nouveau.trim_end_matches('/');
+    let ancien = ancien.trim_end_matches(['/', '\\']);
+    let nouveau = nouveau.trim_end_matches(['/', '\\']);
+    let cue_ancien = format!("cue://{ancien}");
+    let cue_nouveau = format!("cue://{nouveau}");
     let mut tx = pool.begin_with("BEGIN IMMEDIATE").await.map_err(|e| format!("transaction : {e}"))?;
     let mut fichiers = 0;
     for (table, colonne) in COLONNES {
@@ -27,7 +29,9 @@ pub async fn relocate_prefix(pool: &SqlitePool, ancien: &str, nouveau: &str) -> 
         let ignorer = matches!(table, "queue_tracks" | "recent_files" | "track_liked");
         let sql = format!(
             "UPDATE {} {table} SET {colonne} = ?2 || substr({colonne}, length(?1) + 1) \
-             WHERE {colonne} = ?1 OR substr({colonne}, 1, length(?1) + 1) = ?1 || '/'",
+             WHERE {colonne} = ?1
+                OR substr({colonne}, 1, length(?1) + 1) = ?1 || '/'
+                OR substr({colonne}, 1, length(?1) + 1) = ?1 || '\\'",
             if ignorer { "OR IGNORE" } else { "" },
         );
         // Tables et colonnes viennent de la liste fixe ci-dessus ; les chemins sont liés.
@@ -38,7 +42,25 @@ pub async fn relocate_prefix(pool: &SqlitePool, ancien: &str, nouveau: &str) -> 
             .await
             .map_err(|e| format!("{table}.{colonne} : {e}"))?;
         if table == "library_files" {
-            fichiers = fait.rows_affected();
+            fichiers += fait.rows_affected();
+        }
+
+        if table != "library_dirs" && table != "library_albums" {
+            let cue_sql = format!(
+                "UPDATE {} {table} SET {colonne} = ?2 || substr({colonne}, length(?1) + 1) \
+                 WHERE substr({colonne}, 1, length(?1) + 1) = ?1 || '/'
+                    OR substr({colonne}, 1, length(?1) + 1) = ?1 || '\\'",
+                if ignorer { "OR IGNORE" } else { "" },
+            );
+            let cue_fait = sqlx::query(sqlx::AssertSqlSafe(cue_sql))
+                .bind(&cue_ancien)
+                .bind(&cue_nouveau)
+                .execute(&mut *tx)
+                .await
+                .map_err(|e| format!("{table}.{colonne} (cue) : {e}"))?;
+            if table == "library_files" {
+                fichiers += cue_fait.rows_affected();
+            }
         }
     }
     tx.commit().await.map_err(|e| format!("validation : {e}"))?;
@@ -78,5 +100,20 @@ mod tests {
             format!("{nouveau}/Mp3 - 320 kbits"),
             format!("{ancien}2/Flac"),
         ]);
+
+        // Test chemins Windows avec antislashes
+        let win_old = r"C:\Musique\Archive\";
+        let win_new = r"D:\Audio";
+        sqlx::query("INSERT INTO library_dirs (id, library_id, path, name) VALUES ('win1', 1, ?, 'w')")
+            .bind(r"C:\Musique\Archive\Rock")
+            .execute(&pool)
+            .await
+            .unwrap();
+        relocate_prefix(&pool, win_old, win_new).await.unwrap();
+        let moved_win: String = sqlx::query_scalar("SELECT path FROM library_dirs WHERE id = 'win1'")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(moved_win, r"D:\Audio\Rock");
     }
 }

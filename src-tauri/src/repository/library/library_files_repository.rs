@@ -47,8 +47,8 @@ impl LibraryFilesRepository {
     }
 
     /// Chemins indexés d'une bibliothèque rangés sous un dossier (sous-dossiers
-    /// compris). Le tri des fichiers disparus s'en sert pour trouver ce qui ne
-    /// répond plus.
+    /// et pistes `cue://` compris). Le tri des fichiers disparus s'en sert pour
+    /// trouver ce qui ne répond plus.
     pub async fn paths_under<'e, E>(
         exec: E,
         library_id: i64,
@@ -57,14 +57,29 @@ impl LibraryFilesRepository {
     where
         E: sqlx::Executor<'e, Database = sqlx::Sqlite>,
     {
-        let prefix = format!("{}/", directory.trim_end_matches('/'));
+        let clean = directory.trim_end_matches(['/', '\\']);
+        let (p_slash, p_backslash) = if clean.is_empty() {
+            ("/".to_string(), "\\".to_string())
+        } else {
+            (format!("{clean}/"), format!("{clean}\\"))
+        };
+        let cue_slash = format!("cue://{p_slash}");
+        let cue_backslash = format!("cue://{p_backslash}");
+
         sqlx::query_scalar(
             "SELECT path FROM library_files
-             WHERE library_id = ? AND status = 'indexed' AND substr(path, 1, length(?)) = ?",
+             WHERE library_id = ?1 AND status = 'indexed' AND (
+                 substr(path, 1, length(?2)) = ?2
+                 OR substr(path, 1, length(?3)) = ?3
+                 OR substr(path, 1, length(?4)) = ?4
+                 OR substr(path, 1, length(?5)) = ?5
+             )",
         )
         .bind(library_id)
-        .bind(&prefix)
-        .bind(&prefix)
+        .bind(&p_slash)
+        .bind(&p_backslash)
+        .bind(&cue_slash)
+        .bind(&cue_backslash)
         .fetch_all(exec)
         .await
     }

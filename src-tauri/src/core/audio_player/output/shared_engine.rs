@@ -47,6 +47,11 @@ fn notify(device: &str, fallback: Option<String>) {
     }
 }
 
+#[cfg_attr(target_os = "macos", allow(dead_code))]
+pub(super) fn notify_lost(device: &str, fallback: Option<String>) {
+    notify(device, fallback);
+}
+
 #[derive(Debug, Clone, PartialEq)]
 struct EngineKey {
     device: String,

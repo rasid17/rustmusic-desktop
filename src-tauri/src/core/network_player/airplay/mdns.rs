@@ -58,9 +58,17 @@ pub async fn browse(service: &str, wait: Duration) -> Vec<Service> {
         }
         let step = deadline.min(resend);
         for s in &sockets {
-            while let Ok((n, from)) = s.try_recv_from(&mut buf) {
-                if let SocketAddr::V4(from) = from {
-                    records.read_packet(&buf[..n], *from.ip());
+            loop {
+                match s.try_recv_from(&mut buf) {
+                    Ok((n, from)) => {
+                        if let SocketAddr::V4(from) = from {
+                            records.read_packet(&buf[..n], *from.ip());
+                        }
+                    }
+                    Err(e) if matches!(e.kind(), std::io::ErrorKind::ConnectionReset | std::io::ErrorKind::Interrupted) || e.raw_os_error() == Some(10054) => {
+                        continue;
+                    }
+                    Err(_) => break,
                 }
             }
         }

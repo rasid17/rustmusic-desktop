@@ -20,8 +20,8 @@ type Payload = { library_id: number; dirs: UnavailableDir[] };
 /** Nom lisible d'un montage GVFS : la valeur de `server=` (`10.0.0.170`, `nas.local`). */
 const serveur = (racine: string) => /server=([^,/]+)/.exec(racine)?.[1] ?? racine;
 
-/** Dernier dossier du chemin, pour le message. */
-const nomDossier = (chemin: string) => chemin.split("/").filter(Boolean).pop() ?? chemin;
+/** Dernier dossier du chemin, pour le message (gère `/` et `\`). */
+const nomDossier = (chemin: string) => chemin.split(/[\\/]/).filter(Boolean).pop() ?? chemin;
 
 async function relocate(libraryId: number, remount: Remount) {
   const tr = get(t);

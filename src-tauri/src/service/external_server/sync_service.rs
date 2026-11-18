@@ -298,7 +298,7 @@ async fn remove_missing(pool: &SqlitePool, library_id: i64, seen: &HashSet<Strin
         .fetch_all(pool)
         .await?;
     let gone: Vec<(String, String)> = known.into_iter().filter(|(_, p)| !seen.contains(p)).collect();
-    let mut tx = pool.begin().await?;
+    let mut tx = pool.begin_with("BEGIN IMMEDIATE").await?;
     for (id, _) in &gone {
         sqlx::query("DELETE FROM library_files WHERE id = ?").bind(id).execute(&mut *tx).await?;
     }

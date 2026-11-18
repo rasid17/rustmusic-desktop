@@ -601,13 +601,31 @@ fn run_cli_agent_blocking(
         "agy" => {
             let bin = find_agent_binary("agy")
                 .ok_or_else(|| "Agent `agy` not found in PATH.".to_string())?;
-            execute_cmd(&bin, &["-p", full_prompt], false)
-                .or_else(|_| execute_cmd(&bin, &[full_prompt], false))
+            // Jangan kirim `full_prompt` lewat argv: Windows `cmd.exe`/`.cmd` dibatasi
+            // 8.191 karakter dan rentan injeksi metakarakter saat judul lagu mengandung `& | ^ %`.
+            let prompt_file = std::env::temp_dir().join(format!(
+                "rustmusic-agy-{}-{}.txt",
+                std::process::id(),
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map(|d| d.as_nanos())
+                    .unwrap_or(0)
+            ));
+            let _ = std::fs::write(&prompt_file, full_prompt);
+            let res = execute_cmd(&bin, &["-p", "-"], true).or_else(|_| {
+                let short = format!(
+                    "Read instructions and catalog strictly from this file and reply with JSON only: {}",
+                    prompt_file.display()
+                );
+                execute_cmd(&bin, &["-p", &short], false)
+            });
+            let _ = std::fs::remove_file(&prompt_file);
+            res
         }
         "codex" => {
             let bin = find_agent_binary("codex")
                 .ok_or_else(|| "Agent `codex` not found in PATH.".to_string())?;
-            execute_cmd(&bin, &["exec", full_prompt], false)
+            execute_cmd(&bin, &["exec", "-"], true)
         }
         "ollama" => {
             let bin = find_agent_binary("ollama")
@@ -1011,7 +1029,7 @@ pub async fn reorder_ai_playlist(
     // 6. Mettre à jour sort_index dans une transaction
     let mut tx = state
         .pool
-        .begin()
+        .begin_with("BEGIN IMMEDIATE")
         .await
         .map_err(|e| format!("Failed to start transaction: {e}"))?;
 

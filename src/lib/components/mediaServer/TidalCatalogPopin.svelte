@@ -1,5 +1,6 @@
 <script lang="ts">
   import Icon from "@iconify/svelte";
+  import { t } from "#lib/i18n";
   import { serverStore } from "#lib/stores/mediaServer/mediaServer.store";
   import { toasts } from "#lib/stores/ui/toast.store";
   import { popinStore } from "#lib/stores/ui/popin.store";
@@ -60,7 +61,7 @@
       if (favorite) {
         toasts.push({
           type: "success",
-          title: "Added to TIDAL Favorites",
+          title: $t("streaming.track_fav_added_tidal"),
           message: `${item.title} — ${item.artist}`,
         });
       }
@@ -82,7 +83,7 @@
       await serverStore.tidalImportTrack(activeServerId, item.id, true);
       toasts.push({
         type: "success",
-        title: "Saved to TIDAL Favorites",
+        title: $t("streaming.track_saved_tidal"),
         message: `${item.title} — ${item.artist}`,
       });
     } catch (err) {
@@ -100,8 +101,11 @@
       const tracks = await serverStore.tidalImportAlbum(activeServerId, album.id, favorite);
       toasts.push({
         type: "success",
-        title: favorite ? "Album added to TIDAL Favorites" : "TIDAL Album ready",
-        message: `${album.title} · ${tracks.length} tracks (${formatQuality(album.bitDepth, album.samplingRate, album.hires)})`,
+        title: $t(favorite ? "streaming.album_fav_added_tidal" : "streaming.album_ready_tidal"),
+        message: $t("streaming.album_summary")
+          .replace("{title}", album.title)
+          .replace("{n}", String(tracks.length))
+          .replace("{quality}", formatQuality(album.bitDepth, album.samplingRate, album.hires)),
       });
       if (playImmediately && tracks.length > 0 && tracks[0].path) {
         await handlePlayTrack(tracks[0].path, toQueue(tracks));
@@ -120,14 +124,14 @@
     <div class="flex-1 min-w-56">
       <FormInput
         bind:value={query}
-        placeholder="Search artist, track, or album on TIDAL..."
+        placeholder={$t("streaming.tidal_search_ph")}
         disabled={searching || !activeServerId}
         onenter={doSearch}
       />
     </div>
     <GhostButton
       icon="material-symbols:search-rounded"
-      label={searching ? "Searching..." : "Search"}
+      label={searching ? $t("streaming.searching") : $t("streaming.search")}
       busy={searching}
       disabled={!query.trim() || !activeServerId}
       onclick={doSearch}
@@ -152,7 +156,7 @@
                {tab === 'tracks' ? 'bg-cyan-500/18 text-cyan-700 dark:text-cyan-300 border border-cyan-500/35' : 'text-(--rg-mu) hover:text-(--rg-tx)'}"
         onclick={() => (tab = 'tracks')}
       >
-        Tracks {results ? `(${results.tracks.length})` : ""}
+        {$t("streaming.tracks_tab")} {results ? `(${results.tracks.length})` : ""}
       </button>
       <button
         type="button"
@@ -160,12 +164,12 @@
                {tab === 'albums' ? 'bg-cyan-500/18 text-cyan-700 dark:text-cyan-300 border border-cyan-500/35' : 'text-(--rg-mu) hover:text-(--rg-tx)'}"
         onclick={() => (tab = 'albums')}
       >
-        Albums {results ? `(${results.albums.length})` : ""}
+        {$t("streaming.albums_tab")} {results ? `(${results.albums.length})` : ""}
       </button>
     </div>
     <span class="text-[11px] text-(--rg-mu) flex items-center gap-1">
       <Icon icon="material-symbols:high-quality-outline-rounded" width="14" class="text-cyan-500" />
-      Bit-Perfect MAX up to 24-bit / 192 kHz FLAC
+      {$t("streaming.tidal_bit_perfect")}
     </span>
   </div>
 
@@ -176,15 +180,15 @@
   {#if !results && !searching}
     <div class="py-10 text-center text-xs text-(--rg-mu) flex flex-col items-center gap-2">
       <Icon icon="material-symbols:travel-explore-rounded" width="34" class="opacity-45" />
-      <p class="font-medium text-(--rg-tx2)">Browse TIDAL Global Hi-Res Catalog</p>
+      <p class="font-medium text-(--rg-tx2)">{$t("streaming.tidal_intro_title")}</p>
       <p class="max-w-md">
-        Enter an artist, track, or album title to play immediately in Bit-Perfect Hi-Res FLAC or add directly to your TIDAL Favorites.
+        {$t("streaming.tidal_intro_desc")}
       </p>
     </div>
   {:else if results && tab === "tracks"}
     <div class="max-h-96 overflow-y-auto divide-y divide-(--rg-bd)/60 pr-1">
       {#if results.tracks.length === 0}
-        <p class="py-8 text-center text-xs text-(--rg-mu)">No tracks found.</p>
+        <p class="py-8 text-center text-xs text-(--rg-mu)">{$t("streaming.tidal_no_tracks")}</p>
       {/if}
       {#each results.tracks as item (item.id)}
         {@const busy = busyId === `track:${item.id}` || busyId === `fav:${item.id}`}
@@ -214,7 +218,7 @@
               disabled={!!busyId}
               onclick={() => importTrackOnly(item)}
               class="h-8 px-2.5 rounded-lg text-xs border border-(--rg-bd) text-(--rg-tx2) hover:bg-(--rg-s2) cursor-pointer disabled:opacity-50"
-              title="Add to TIDAL Favorites & sync to library"
+              title={$t("streaming.tidal_fav_tooltip")}
             >
               <Icon icon="material-symbols:favorite-outline-rounded" width="15" />
             </button>
@@ -225,7 +229,7 @@
               class="h-8 px-3 rounded-lg text-xs font-semibold bg-cyan-500/18 text-cyan-700 dark:text-cyan-300 border border-cyan-500/35 hover:bg-cyan-500/28 cursor-pointer disabled:opacity-50 inline-flex items-center gap-1"
             >
               <Icon icon={busy ? "material-symbols:sync-rounded" : "material-symbols:play-arrow-rounded"} width="16" class={busy ? "animate-spin" : ""} />
-              Play
+              {$t("streaming.play")}
             </button>
           </div>
         </div>
@@ -234,7 +238,7 @@
   {:else if results && tab === "albums"}
     <div class="max-h-96 overflow-y-auto divide-y divide-(--rg-bd)/60 pr-1">
       {#if results.albums.length === 0}
-        <p class="py-8 text-center text-xs text-(--rg-mu)">No albums found.</p>
+        <p class="py-8 text-center text-xs text-(--rg-mu)">{$t("streaming.tidal_no_albums")}</p>
       {/if}
       {#each results.albums as album (album.id)}
         {@const busy = busyId === `album:${album.id}`}
@@ -255,7 +259,7 @@
               </span>
             </div>
             <p class="text-[11.5px] text-(--rg-mu) truncate">
-              {album.artist} {album.year ? `· ${album.year}` : ""} · {album.tracksCount} tracks
+              {album.artist} {album.year ? `· ${album.year}` : ""} · {$t("streaming.tracks_unit").replace("{n}", String(album.tracksCount))}
             </p>
           </div>
           <div class="flex items-center gap-1.5 shrink-0">
@@ -264,7 +268,7 @@
               disabled={!!busyId}
               onclick={() => importAlbum(album, true, false)}
               class="h-8 px-2.5 rounded-lg text-xs border border-(--rg-bd) text-(--rg-tx2) hover:bg-(--rg-s2) cursor-pointer disabled:opacity-50"
-              title="Add album to TIDAL Favorites & sync"
+              title={$t("streaming.tidal_album_fav_tooltip")}
             >
               <Icon icon="material-symbols:favorite-outline-rounded" width="15" />
             </button>
@@ -275,7 +279,7 @@
               class="h-8 px-3 rounded-lg text-xs font-semibold bg-cyan-500/18 text-cyan-700 dark:text-cyan-300 border border-cyan-500/35 hover:bg-cyan-500/28 cursor-pointer disabled:opacity-50 inline-flex items-center gap-1"
             >
               <Icon icon={busy ? "material-symbols:sync-rounded" : "material-symbols:play-arrow-rounded"} width="16" class={busy ? "animate-spin" : ""} />
-              Play Album
+              {$t("streaming.play_album")}
             </button>
           </div>
         </div>

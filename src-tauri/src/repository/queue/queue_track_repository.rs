@@ -107,7 +107,7 @@ impl QueueTrackRepository {
     pub async fn replace_all(pool: &SqlitePool, profil_id: i64, tracks: Vec<QueueTrack>) -> Result<(), sqlx::Error>
     {
         // On ouvre la transaction !
-        let mut tx = pool.begin().await?;
+        let mut tx = pool.begin_with("BEGIN IMMEDIATE").await?;
 
         // 1. On nettoie tout pour ce profil
         sqlx::query("DELETE FROM queue_tracks WHERE profil_id = ?")

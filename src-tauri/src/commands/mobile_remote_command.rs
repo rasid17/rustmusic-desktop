@@ -9,7 +9,9 @@ use tauri::{AppHandle, State};
 use crate::core::dlna_server::net::detect_local_ipv4;
 use crate::core::mobile_remote::qr::generate_svg;
 use crate::core::mobile_remote::server::MobileRemoteServer;
-use crate::core::mobile_remote::state::{MobileRemoteSharedState, RemotePlayerState};
+use crate::core::mobile_remote::state::{
+    generate_random_pin, MobileRemoteSharedState, RemotePlayerState,
+};
 use crate::repository::settings::settings_repository::SettingsRepository;
 use crate::state::AppState;
 
@@ -19,7 +21,6 @@ const KEY_PIN_ENABLED: &str = "mobile_remote_pin_enabled";
 const KEY_PIN: &str = "mobile_remote_pin";
 
 const DEFAULT_PORT: u16 = 8300;
-const DEFAULT_PIN: &str = "4829";
 
 #[derive(Debug, Serialize, Clone)]
 pub struct MobileRemoteStatus {
@@ -54,11 +55,18 @@ async fn load_config(pool: &SqlitePool) -> Result<PersistedConfig, String> {
         .filter(|&p| p > 0)
         .unwrap_or(DEFAULT_PORT);
 
-    let pin_enabled = SettingsRepository::get(pool, KEY_PIN_ENABLED)
+    let pin_enabled = match SettingsRepository::get(pool, KEY_PIN_ENABLED)
         .await
         .map_err(|e| format!("read {KEY_PIN_ENABLED}: {e}"))?
-        .map(|v| v == "true")
-        .unwrap_or(false);
+    {
+        Some(v) => v == "true",
+        None => {
+            SettingsRepository::set(pool, KEY_PIN_ENABLED, "true")
+                .await
+                .map_err(|e| format!("write {KEY_PIN_ENABLED}: {e}"))?;
+            true
+        }
+    };
 
     let pin = match SettingsRepository::get(pool, KEY_PIN)
         .await
@@ -66,10 +74,11 @@ async fn load_config(pool: &SqlitePool) -> Result<PersistedConfig, String> {
     {
         Some(p) if !p.trim().is_empty() => p,
         _ => {
-            SettingsRepository::set(pool, KEY_PIN, DEFAULT_PIN)
+            let random_pin = generate_random_pin();
+            SettingsRepository::set(pool, KEY_PIN, &random_pin)
                 .await
                 .map_err(|e| format!("write {KEY_PIN}: {e}"))?;
-            DEFAULT_PIN.to_string()
+            random_pin
         }
     };
 
@@ -82,8 +91,16 @@ async fn load_config(pool: &SqlitePool) -> Result<PersistedConfig, String> {
 }
 
 async fn sync_shared_auth(shared: &MobileRemoteSharedState, cfg: &PersistedConfig) {
-    shared.pin_enabled.store(cfg.pin_enabled, Ordering::Relaxed);
-    *shared.pin.write().await = cfg.pin.clone();
+    let prev_enabled = shared.pin_enabled.swap(cfg.pin_enabled, Ordering::Relaxed);
+    let mut guard = shared.pin.write().await;
+    let pin_changed = *guard != cfg.pin;
+    if pin_changed {
+        *guard = cfg.pin.clone();
+    }
+    drop(guard);
+    if pin_changed || prev_enabled != cfg.pin_enabled {
+        shared.invalidate_sessions().await;
+    }
 }
 
 async fn build_status(
@@ -202,8 +219,8 @@ pub async fn mobile_remote_update_settings(
 
     if let Some(ref new_pin) = pin {
         let trimmed = new_pin.trim();
-        if trimmed.is_empty() {
-            return Err("PIN cannot be empty".into());
+        if trimmed.is_empty() || trimmed.len() > 32 {
+            return Err("PIN must be between 1 and 32 characters".into());
         }
         SettingsRepository::set(&state.pool, KEY_PIN, trimmed)
             .await

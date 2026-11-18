@@ -73,7 +73,7 @@
         <a href="https://larevuegeek.fr" target="_blank" rel="noopener noreferrer" class="font-semibold text-(--rg-tx2) hover:text-(--rg-gtx) transition-colors">LaRevueGeeK</a>
       </p>
     </div>
-    {#if !$platformFeatures.flatpak}
+    {#if $platformFeatures.updater_supported && !$platformFeatures.flatpak}
     <div class="relative">
       <GhostButton
         icon={installer ? "material-symbols:download-rounded" : "material-symbols:sync-rounded"}

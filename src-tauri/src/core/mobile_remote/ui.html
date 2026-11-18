@@ -444,7 +444,7 @@
 
     function coverUrl(path) {
       if (!path) return "";
-      return "/api/cover?path=" + encodeURIComponent(path) + (pin ? "&pin=" + encodeURIComponent(pin) : "");
+      return "/api/cover?path=" + encodeURIComponent(path);
     }
 
     function fmtTime(sec) {
@@ -459,6 +459,10 @@
       return String(str ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
     }
 
+    function safeColor(color) {
+      return /^#[0-9a-fA-F]{6}$/.test(String(color ?? "")) ? color : "#22c55e";
+    }
+
     function showToast(msg) {
       const el = document.getElementById("toast");
       el.textContent = msg;
@@ -469,10 +473,18 @@
 
     async function apiFetch(url, opts = {}) {
       opts.headers = Object.assign(headers(), opts.headers || {});
+      opts.credentials = "same-origin";
       const res = await fetch(url, opts);
-      if (res.status === 401) {
+      if (res.status === 401 || res.status === 429) {
         document.getElementById("pinOverlay").classList.add("open");
-        throw new Error("Unauthorized");
+        if (res.status === 429) {
+          showToast("Too many wrong PIN attempts. Wait 30s.");
+        }
+        throw new Error(res.status === 429 ? "Rate limited" : "Unauthorized");
+      }
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.error || ("HTTP " + res.status));
       }
       document.getElementById("pinOverlay").classList.remove("open");
       return res.json();
@@ -483,10 +495,16 @@
       localStorage.setItem("rm_remote_pin", pin);
       try {
         const s = await apiFetch("/api/state");
+        const coverBox = document.getElementById("npCoverBox");
+        if (coverBox) coverBox.dataset.src = "";
         applyState(s);
         loadBrowse(true);
       } catch {}
     }
+
+    document.getElementById("pinInput").addEventListener("keydown", (e) => {
+      if (e.key === "Enter") submitPin();
+    });
 
     async function sendCmd(payload, toastMsg) {
       try {
@@ -524,9 +542,18 @@
       const wantedCover = s.thumbnail_path ? coverUrl(s.thumbnail_path) : "";
       if (coverBox.dataset.src !== wantedCover) {
         coverBox.dataset.src = wantedCover;
-        coverBox.innerHTML = wantedCover
-          ? `<img src="${esc(wantedCover)}" alt="" onerror="this.parentElement.innerHTML='<span class=np-placeholder>♪</span>'" />`
-          : `<span class="np-placeholder">♪</span>`;
+        coverBox.innerHTML = "";
+        if (wantedCover) {
+          const img = document.createElement("img");
+          img.src = wantedCover;
+          img.alt = "";
+          img.addEventListener("error", () => {
+            coverBox.innerHTML = '<span class="np-placeholder">♪</span>';
+          });
+          coverBox.appendChild(img);
+        } else {
+          coverBox.innerHTML = '<span class="np-placeholder">♪</span>';
+        }
       }
 
       const likeBtn = document.getElementById("npLikeBtn");
@@ -586,13 +613,13 @@
       listEl.innerHTML = s.queue.map((item, idx) => {
         const active = idx === s.current_index;
         const img = item.thumbnail_path ? `<img src="${esc(coverUrl(item.thumbnail_path))}" loading="lazy" alt="" />` : "♪";
-        return `<div class="row ${active ? 'playing' : ''}" onclick="sendCmd({cmd:'play-at',index:${idx}})">
+        return `<div class="row ${active ? 'playing' : ''}" data-action="play-at" data-idx="${idx}">
           <div class="thumb">${img}</div>
           <div class="row-info">
             <div class="row-title">${esc(item.title)}</div>
             <div class="row-sub">${esc(item.artist)}${item.album ? ' · ' + esc(item.album) : ''}</div>
           </div>
-          <button class="row-act" onclick="event.stopPropagation();sendCmd({cmd:'remove-queue-item',queue_id:'${esc(item.queue_id)}'},'Removed from queue')" title="Remove">✕</button>
+          <button class="row-act" data-action="remove-queue" data-queue-id="${esc(item.queue_id)}" title="Remove">✕</button>
         </div>`;
       }).join("");
     }
@@ -701,20 +728,20 @@
     function renderTrackRow(t, idx, contextPaths) {
       const img = t.thumbnail_path ? `<img src="${esc(coverUrl(t.thumbnail_path))}" loading="lazy" alt="" />` : "♪";
       const hi = (t.bits_per_sample && t.bits_per_sample > 16) || (t.sample_rate && t.sample_rate > 48000);
-      return `<div class="row" onclick='playTrackFromList(${idx})'>
+      return `<div class="row" data-action="play-track" data-idx="${idx}">
         <div class="thumb">${img}</div>
         <div class="row-info">
           <div class="row-title">${esc(t.title)}${hi ? '<span class="badge-hi">Hi-Res</span>' : ''}</div>
           <div class="row-sub">${esc(t.artist)}${t.album ? ' · ' + esc(t.album) : ''}</div>
         </div>
-        <button class="row-act" onclick='event.stopPropagation();openTrackSheet(${idx})'>⋯</button>
+        <button class="row-act" data-action="track-sheet" data-idx="${idx}">⋯</button>
       </div>`;
     }
 
     function renderBrowseItems() {
       const listEl = document.getElementById("browseList");
       if (browseItems.length === 0) {
-        listEl.innerHTML = `<div class="empty-msg">No ${browseMode} found</div>`;
+        listEl.innerHTML = `<div class="empty-msg">No ${esc(browseMode)} found</div>`;
         return;
       }
       if (browseMode === "tracks") {
@@ -722,22 +749,22 @@
       } else if (browseMode === "albums") {
         listEl.innerHTML = browseItems.map((a) => {
           const img = a.thumbnail_path ? `<img src="${esc(coverUrl(a.thumbnail_path))}" loading="lazy" alt="" />` : "◎";
-          return `<div class="row" onclick="openAlbum('${esc(a.id)}')">
+          return `<div class="row" data-action="open-album" data-id="${esc(a.id)}">
             <div class="thumb">${img}</div>
             <div class="row-info">
               <div class="row-title">${esc(a.title)}</div>
-              <div class="row-sub">${esc(a.artist)} · ${a.total_tracks} tracks${a.year ? ' · ' + a.year : ''}</div>
+              <div class="row-sub">${esc(a.artist)} · ${Number(a.total_tracks) || 0} tracks${a.year ? ' · ' + esc(a.year) : ''}</div>
             </div>
           </div>`;
         }).join("");
       } else if (browseMode === "artists") {
         listEl.innerHTML = browseItems.map((ar) => {
           const img = ar.thumbnail_path ? `<img src="${esc(coverUrl(ar.thumbnail_path))}" loading="lazy" alt="" />` : "★";
-          return `<div class="row" onclick="openArtist('${esc(ar.id)}')">
+          return `<div class="row" data-action="open-artist" data-id="${esc(ar.id)}">
             <div class="thumb">${img}</div>
             <div class="row-info">
               <div class="row-title">${esc(ar.name)}</div>
-              <div class="row-sub">${ar.total_albums} albums · ${ar.total_tracks} tracks</div>
+              <div class="row-sub">${Number(ar.total_albums) || 0} albums · ${Number(ar.total_tracks) || 0} tracks</div>
             </div>
           </div>`;
         }).join("");
@@ -756,8 +783,8 @@
           <div style="font-size:12px;color:var(--mu)">${esc(alb.artist)} · ${browseItems.length} tracks</div>
         </div>
         <div class="btn-row">
-          <button class="chip-btn" onclick="loadBrowse(true)">Back</button>
-          <button class="chip-btn primary" onclick="sendCmd({cmd:'play-album',album_id:'${esc(albumId)}'},'Playing album')">Play</button>
+          <button class="chip-btn" data-action="browse-back">Back</button>
+          <button class="chip-btn primary" data-action="play-album" data-id="${esc(albumId)}">Play</button>
         </div>
       </div>`;
       document.getElementById("browseMoreWrap").style.display = "none";
@@ -776,8 +803,8 @@
           <div style="font-size:12px;color:var(--mu)">${browseItems.length} tracks</div>
         </div>
         <div class="btn-row">
-          <button class="chip-btn" onclick="loadBrowse(true)">Back</button>
-          <button class="chip-btn primary" onclick="sendCmd({cmd:'play-artist',artist_id:'${esc(artistId)}'},'Playing artist')">Play All</button>
+          <button class="chip-btn" data-action="browse-back">Back</button>
+          <button class="chip-btn primary" data-action="play-artist" data-id="${esc(artistId)}">Play All</button>
         </div>
       </div>`;
       document.getElementById("browseMoreWrap").style.display = "none";
@@ -815,14 +842,14 @@
       }
 
       const plButtons = cachedPlaylists.map((p) =>
-        `<button class="sheet-btn" onclick="addSelectedToPlaylist('${esc(p.id)}','${esc(p.name)}')">＋ Add to "${esc(p.name)}"</button>`
+        `<button class="sheet-btn" data-action="sheet-add-pl" data-id="${esc(p.id)}" data-name="${esc(p.name)}">＋ Add to "${esc(p.name)}"</button>`
       ).join("");
 
       document.getElementById("sheetActions").innerHTML = `
-        <button class="sheet-btn" onclick="playSelectedTrackNow()">▶ Play Now</button>
-        <button class="sheet-btn" onclick="sendCmd({cmd:'play-next',path:selectedTrack.path,track_id:selectedTrack.id},'Playing next');closeSheet()">⏭ Play Next</button>
-        <button class="sheet-btn" onclick="sendCmd({cmd:'enqueue-track',path:selectedTrack.path,track_id:selectedTrack.id},'Added to queue');closeSheet()">☰ Add to Queue</button>
-        <button class="sheet-btn" onclick="sendCmd({cmd:'toggle-like',path:selectedTrack.path},'Updated Liked Tracks');closeSheet()">♥ Toggle Like</button>
+        <button class="sheet-btn" data-action="sheet-play-now">▶ Play Now</button>
+        <button class="sheet-btn" data-action="sheet-play-next">⏭ Play Next</button>
+        <button class="sheet-btn" data-action="sheet-enqueue">☰ Add to Queue</button>
+        <button class="sheet-btn" data-action="sheet-toggle-like">♥ Toggle Like</button>
         ${plButtons}
       `;
       document.getElementById("actionSheet").classList.add("open");
@@ -845,23 +872,24 @@
         cachedPlaylists = pls.filter((p) => !p.is_builtin && !p.is_smart);
         document.getElementById("playlistHeader").innerHTML = `
           <div class="section-title">Playlists</div>
-          <button class="chip-btn" onclick="loadPlaylists()">Refresh</button>
+          <button class="chip-btn" data-action="playlists-refresh">Refresh</button>
         `;
         const listEl = document.getElementById("playlistList");
         if (pls.length === 0) {
           listEl.innerHTML = `<div class="empty-msg">No playlists yet</div>`;
           return;
         }
-        listEl.innerHTML = pls.map((p) => `
-          <div class="row" onclick="openPlaylist('${esc(p.id)}')">
-            <div class="thumb" style="background:${esc(p.color)}22;color:${esc(p.color)};border-color:${esc(p.color)}44">♫</div>
+        listEl.innerHTML = pls.map((p) => {
+          const col = safeColor(p.color);
+          return `<div class="row" data-action="open-playlist" data-id="${esc(p.id)}">
+            <div class="thumb" style="background:${col}22;color:${col};border-color:${col}44">♫</div>
             <div class="row-info">
               <div class="row-title">${esc(p.name)}</div>
-              <div class="row-sub">${p.track_count} tracks${p.is_smart ? ' · Smart' : ''}</div>
+              <div class="row-sub">${Number(p.track_count) || 0} tracks${p.is_smart ? ' · Smart' : ''}</div>
             </div>
-            <button class="chip-btn" onclick="event.stopPropagation();sendCmd({cmd:'play-playlist',playlist_id:'${esc(p.id)}'},'Playing ${esc(p.name)}')">▶ Play</button>
-          </div>
-        `).join("");
+            <button class="chip-btn" data-action="play-playlist" data-id="${esc(p.id)}" data-name="${esc(p.name)}">▶ Play</button>
+          </div>`;
+        }).join("");
       } catch (e) {
         console.error(e);
       }
@@ -878,9 +906,9 @@
             <div style="font-size:12px;color:var(--mu)">${browseItems.length} tracks</div>
           </div>
           <div class="btn-row">
-            <button class="chip-btn" onclick="loadPlaylists()">Back</button>
-            <button class="chip-btn" onclick="sendCmd({cmd:'play-playlist',playlist_id:'${esc(plId)}',shuffle:true},'Shuffling playlist')">Shuffle</button>
-            <button class="chip-btn primary" onclick="sendCmd({cmd:'play-playlist',playlist_id:'${esc(plId)}'},'Playing playlist')">Play</button>
+            <button class="chip-btn" data-action="playlists-refresh">Back</button>
+            <button class="chip-btn" data-action="shuffle-playlist" data-id="${esc(plId)}">Shuffle</button>
+            <button class="chip-btn primary" data-action="play-playlist" data-id="${esc(plId)}" data-name="playlist">Play</button>
           </div>
         `;
         const listEl = document.getElementById("playlistList");
@@ -893,6 +921,58 @@
         console.error(e);
       }
     }
+
+    document.addEventListener("click", (e) => {
+      const target = e.target.closest("[data-action]");
+      if (!target) return;
+      const action = target.dataset.action;
+      if (action === "remove-queue") {
+        e.stopPropagation();
+        sendCmd({ cmd: "remove-queue-item", queue_id: target.dataset.queueId }, "Removed from queue");
+      } else if (action === "play-at") {
+        sendCmd({ cmd: "play-at", index: Number(target.dataset.idx) });
+      } else if (action === "track-sheet") {
+        e.stopPropagation();
+        openTrackSheet(Number(target.dataset.idx));
+      } else if (action === "play-track") {
+        playTrackFromList(Number(target.dataset.idx));
+      } else if (action === "open-album") {
+        openAlbum(target.dataset.id);
+      } else if (action === "open-artist") {
+        openArtist(target.dataset.id);
+      } else if (action === "browse-back") {
+        loadBrowse(true);
+      } else if (action === "play-album") {
+        sendCmd({ cmd: "play-album", album_id: target.dataset.id }, "Playing album");
+      } else if (action === "play-artist") {
+        sendCmd({ cmd: "play-artist", artist_id: target.dataset.id }, "Playing artist");
+      } else if (action === "sheet-play-now") {
+        playSelectedTrackNow();
+      } else if (action === "sheet-play-next") {
+        if (!selectedTrack) return;
+        sendCmd({ cmd: "play-next", path: selectedTrack.path, track_id: selectedTrack.id }, "Playing next");
+        closeSheet();
+      } else if (action === "sheet-enqueue") {
+        if (!selectedTrack) return;
+        sendCmd({ cmd: "enqueue-track", path: selectedTrack.path, track_id: selectedTrack.id }, "Added to queue");
+        closeSheet();
+      } else if (action === "sheet-toggle-like") {
+        if (!selectedTrack) return;
+        sendCmd({ cmd: "toggle-like", path: selectedTrack.path }, "Updated Liked Tracks");
+        closeSheet();
+      } else if (action === "sheet-add-pl") {
+        addSelectedToPlaylist(target.dataset.id, target.dataset.name);
+      } else if (action === "playlists-refresh") {
+        loadPlaylists();
+      } else if (action === "play-playlist") {
+        e.stopPropagation();
+        sendCmd({ cmd: "play-playlist", playlist_id: target.dataset.id }, "Playing " + (target.dataset.name || "playlist"));
+      } else if (action === "shuffle-playlist") {
+        sendCmd({ cmd: "play-playlist", playlist_id: target.dataset.id, shuffle: true }, "Shuffling playlist");
+      } else if (action === "open-playlist") {
+        openPlaylist(target.dataset.id);
+      }
+    });
 
     pollLoop();
   </script>

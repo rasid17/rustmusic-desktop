@@ -99,7 +99,7 @@ impl ServerRepository {
 
     /// Épingle (ou non) les playlists du serveur, celles déjà là comme les prochaines.
     pub async fn set_pin_playlists(pool: &SqlitePool, id: i64, pin: bool) -> Result<(), sqlx::Error> {
-        let mut tx = pool.begin().await?;
+        let mut tx = pool.begin_with("BEGIN IMMEDIATE").await?;
         sqlx::query("UPDATE media_servers SET pin_playlists = ? WHERE id = ?").bind(pin).bind(id).execute(&mut *tx).await?;
         sqlx::query("UPDATE playlists SET pinned = ? WHERE server_id = ?").bind(pin).bind(id).execute(&mut *tx).await?;
         tx.commit().await
@@ -121,7 +121,7 @@ impl ServerRepository {
     /// Le serveur, ses bibliothèques et leur contenu ; aussi ce qui ne part pas en cascade
     /// (cache des tags, file d'attente, récents, titres aimés, playlists de la source).
     pub async fn delete(pool: &SqlitePool, id: i64) -> Result<(), sqlx::Error> {
-        let mut tx = pool.begin().await?;
+        let mut tx = pool.begin_with("BEGIN IMMEDIATE").await?;
         // Une playlist rattachée à la bibliothèque est gardée, détachée.
         sqlx::query("UPDATE playlists SET library_id = NULL WHERE library_id IN (SELECT id FROM library WHERE server_id = ?)")
             .bind(id)
@@ -156,7 +156,11 @@ impl ServerRepository {
 
 /// Traces d'un serveur liées par chemin seulement : cache des tags, file, hors ligne.
 async fn purge_prefix(conn: &mut sqlx::SqliteConnection, prefix: &str) -> Result<(), sqlx::Error> {
-    let like = format!("{}%", prefix.replace('%', "").replace('_', "\\_"));
+    let escaped = prefix
+        .replace('\\', "\\\\")
+        .replace('%', "\\%")
+        .replace('_', "\\_");
+    let like = format!("{escaped}%");
     for table in ["queue_tracks", "offline_tracks", "library_cache"] {
         sqlx::query(sqlx::AssertSqlSafe(format!("DELETE FROM {table} WHERE path LIKE ? ESCAPE '\\'")))
             .bind(&like)
@@ -168,9 +172,18 @@ async fn purge_prefix(conn: &mut sqlx::SqliteConnection, prefix: &str) -> Result
 
 /// Les mêmes traces pour des morceaux précis (disparus du serveur, bibliothèque retirée).
 pub async fn purge_paths(conn: &mut sqlx::SqliteConnection, paths: &[String]) -> Result<(), sqlx::Error> {
-    for path in paths {
+    if paths.is_empty() {
+        return Ok(());
+    }
+    for chunk in paths.chunks(400) {
+        let holders = std::iter::repeat_n("?", chunk.len()).collect::<Vec<_>>().join(",");
         for table in ["queue_tracks", "track_liked", "offline_tracks", "library_cache"] {
-            sqlx::query(sqlx::AssertSqlSafe(format!("DELETE FROM {table} WHERE path = ?"))).bind(path).execute(&mut *conn).await?;
+            let sql = format!("DELETE FROM {table} WHERE path IN ({holders})");
+            let mut q = sqlx::query(sqlx::AssertSqlSafe(sql));
+            for path in chunk {
+                q = q.bind(path);
+            }
+            q.execute(&mut *conn).await?;
         }
     }
     Ok(())

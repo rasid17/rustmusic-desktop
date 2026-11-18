@@ -137,15 +137,22 @@ impl Download {
     }
 
     /// Bloc `index` demandé à part (`Range`) ; `None` si le serveur ne le permet pas.
-    /// Appelé depuis le fil du décodeur, jamais depuis une tâche asynchrone.
-    fn block(&self, index: u64) -> io::Result<Option<Arc<Vec<u8>>>> {
+    /// Safe depuis un contexte sync ou asynchrone Tokio sans paniquer `block_on`.
+    fn block(self: &Arc<Self>, index: u64) -> io::Result<Option<Arc<Vec<u8>>>> {
         if !self.ranges.load(Ordering::Relaxed) {
             return Ok(None);
         }
         if let Some(b) = self.cached(index) {
             return Ok(Some(b));
         }
-        tauri::async_runtime::block_on(self.fetch_block(index))
+        if let Ok(handle) = tokio::runtime::Handle::try_current() {
+            let me = Arc::clone(self);
+            std::thread::spawn(move || handle.block_on(me.fetch_block(index)))
+                .join()
+                .map_err(|_| io::Error::other("fetch_block thread panicked"))?
+        } else {
+            tauri::async_runtime::block_on(self.fetch_block(index))
+        }
     }
 
     fn cached(&self, index: u64) -> Option<Arc<Vec<u8>>> {
@@ -345,6 +352,8 @@ async fn fetch_segments_into(dl: &Arc<Download>, urls: &[String]) -> Result<(), 
         if !resp.status().is_success() {
             return Err(format!("segment {} refusé : HTTP {}", idx + 1, resp.status().as_u16()));
         }
+        let seg_expected = resp.content_length();
+        let mut seg_written: u64 = 0;
         loop {
             if dl.cancelled.load(Ordering::Relaxed) {
                 return Err("téléchargement annulé".into());
@@ -356,7 +365,18 @@ async fn fetch_segments_into(dl: &Arc<Download>, urls: &[String]) -> Result<(), 
             let Some(chunk) = chunk else { break };
             file.write_all(&chunk).await.map_err(|e| e.to_string())?;
             let n = chunk.len() as u64;
+            seg_written += n;
             dl.update(|p| p.written += n);
+        }
+        if let Some(exp) = seg_expected {
+            if seg_written != exp {
+                return Err(format!(
+                    "segment {} tronqué ({} / {} octets)",
+                    idx + 1,
+                    seg_written,
+                    exp
+                ));
+            }
         }
     }
     file.flush().await.map_err(|e| e.to_string())?;
@@ -444,8 +464,22 @@ pub struct GrowingFile {
 
 impl GrowingFile {
     fn open(dl: Arc<Download>) -> io::Result<Self> {
+        if !dl.part.exists() && !dl.path.exists() {
+            let _ = dl.wait_for(1, Duration::from_secs(5));
+        }
+        let open_shared = |p: &Path| {
+            let mut opts = std::fs::OpenOptions::new();
+            opts.read(true);
+            #[cfg(windows)]
+            {
+                use std::os::windows::fs::OpenOptionsExt;
+                // Permet le rename/unlink atomique de `.part` vers `.path` pendant la lecture sur Windows.
+                opts.share_mode(0b111);
+            }
+            opts.open(p)
+        };
         // Fini entre-temps : le `.part` est devenu le fichier définitif.
-        let file = File::open(&dl.part).or_else(|_| File::open(&dl.path))?;
+        let file = open_shared(&dl.part).or_else(|_| open_shared(&dl.path))?;
         Ok(Self { dl, file, pos: 0 })
     }
 
@@ -483,9 +517,13 @@ impl Read for GrowingFile {
             if total.is_some_and(|t| self.pos >= t) {
                 return Ok(0);
             }
-            // Taille seulement estimée : la fin n'est lue que pour ses tags, on ne l'attend pas.
+            // Taille seulement estimée sur un flux Range unique : la fin n'est lue que pour ses tags.
             let hint = self.dl.size_hint.load(Ordering::Relaxed);
-            if total.is_none() && hint > 0 && self.pos + TAIL >= hint {
+            if self.dl.ranges.load(Ordering::Relaxed)
+                && total.is_none()
+                && hint > 0
+                && self.pos + TAIL >= hint
+            {
                 let n = buf.len().min(hint.saturating_sub(self.pos) as usize);
                 buf[..n].fill(0);
                 self.pos += n as u64;

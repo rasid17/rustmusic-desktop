@@ -1,11 +1,52 @@
 //! Shared state between the main Tauri window and the Mobile Remote HTTP server.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
 use tokio::sync::{broadcast, RwLock};
+use uuid::Uuid;
+
+const MAX_CONNECTED_CLIENTS: usize = 128;
+const MAX_SESSIONS: usize = 64;
+const MAX_PIN_FAILURES: u32 = 5;
+const PIN_LOCKOUT_SECS: u64 = 30;
+
+/// Génère un code PIN numérique aléatoire à 6 chiffres (100000..=999999).
+pub fn generate_random_pin() -> String {
+    let raw = u32::from_le_bytes(Uuid::new_v4().as_bytes()[0..4].try_into().unwrap_or([0; 4]));
+    format!("{:06}", 100_000 + (raw % 900_000))
+}
+
+/// Génère un jeton de session aléatoire (256 bits encodés en hex).
+fn generate_session_token() -> String {
+    let a = Uuid::new_v4().simple().to_string();
+    let b = Uuid::new_v4().simple().to_string();
+    format!("{a}{b}")
+}
+
+fn constant_time_eq(a: &str, b: &str) -> bool {
+    let ab = a.as_bytes();
+    let bb = b.as_bytes();
+    let max_len = ab.len().max(bb.len());
+    let mut diff = ab.len() ^ bb.len();
+    for i in 0..max_len {
+        let x = ab.get(i).copied().unwrap_or(0);
+        let y = bb.get(i).copied().unwrap_or(0);
+        diff |= (x ^ y) as usize;
+    }
+    diff == 0
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AuthOutcome {
+    AllowedNoPin,
+    CookieValid,
+    PinValid,
+    Unauthorized,
+    RateLimited,
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct RemoteQueueItem {
@@ -113,6 +154,8 @@ pub struct MobileRemoteSharedState {
     pub clients: RwLock<HashMap<String, Instant>>,
     pub pin_enabled: AtomicBool,
     pub pin: RwLock<String>,
+    pub sessions: RwLock<VecDeque<String>>,
+    pub pin_failures: RwLock<(u32, Option<Instant>)>,
 }
 
 impl Default for MobileRemoteSharedState {
@@ -128,8 +171,10 @@ impl MobileRemoteSharedState {
             player: RwLock::new(RemotePlayerState::default()),
             state_tx,
             clients: RwLock::new(HashMap::new()),
-            pin_enabled: AtomicBool::new(false),
-            pin: RwLock::new("1234".to_string()),
+            pin_enabled: AtomicBool::new(true),
+            pin: RwLock::new(generate_random_pin()),
+            sessions: RwLock::new(VecDeque::new()),
+            pin_failures: RwLock::new((0, None)),
         }
     }
 
@@ -148,13 +193,23 @@ impl MobileRemoteSharedState {
     }
 
     pub async fn touch_client(&self, client_id: &str) {
-        if client_id.is_empty() {
+        let cid = client_id.trim();
+        if cid.is_empty() || cid.len() > 64 {
             return;
         }
         let mut guard = self.clients.write().await;
         let now = Instant::now();
         guard.retain(|_, last| now.duration_since(*last) < Duration::from_secs(35));
-        guard.insert(client_id.to_string(), now);
+        if !guard.contains_key(cid) && guard.len() >= MAX_CONNECTED_CLIENTS {
+            if let Some(oldest_key) = guard
+                .iter()
+                .min_by_key(|(_, ts)| *ts)
+                .map(|(k, _)| k.clone())
+            {
+                guard.remove(&oldest_key);
+            }
+        }
+        guard.insert(cid.to_string(), now);
     }
 
     pub async fn client_count(&self) -> usize {
@@ -164,14 +219,121 @@ impl MobileRemoteSharedState {
         guard.len()
     }
 
-    pub async fn check_pin(&self, candidate: Option<&str>) -> bool {
-        if !self.pin_enabled.load(Ordering::Relaxed) {
-            return true;
+    pub async fn invalidate_sessions(&self) {
+        self.sessions.write().await.clear();
+        *self.pin_failures.write().await = (0, None);
+    }
+
+    pub async fn issue_session_token(&self) -> String {
+        let token = generate_session_token();
+        let mut guard = self.sessions.write().await;
+        while guard.len() >= MAX_SESSIONS {
+            guard.pop_front();
         }
-        let Some(c) = candidate else {
-            return false;
+        guard.push_back(token.clone());
+        token
+    }
+
+    pub async fn authorize_request(
+        &self,
+        cookie_token: Option<&str>,
+        candidate_pin: Option<&str>,
+    ) -> AuthOutcome {
+        if !self.pin_enabled.load(Ordering::Relaxed) {
+            return AuthOutcome::AllowedNoPin;
+        }
+
+        if let Some(token) = cookie_token.map(str::trim).filter(|t| !t.is_empty()) {
+            let guard = self.sessions.read().await;
+            let matched = guard.iter().any(|expected| constant_time_eq(token, expected));
+            if matched {
+                return AuthOutcome::CookieValid;
+            }
+        }
+
+        let Some(c) = candidate_pin.map(str::trim).filter(|s| !s.is_empty()) else {
+            return AuthOutcome::Unauthorized;
         };
-        let expected = self.pin.read().await;
-        c.trim() == expected.trim()
+
+        {
+            let mut lock = self.pin_failures.write().await;
+            if let Some(until) = lock.1 {
+                if Instant::now() < until {
+                    return AuthOutcome::RateLimited;
+                }
+                lock.0 = 0;
+                lock.1 = None;
+            }
+        }
+
+        let expected = self.pin.read().await.clone();
+        if constant_time_eq(c, expected.trim()) {
+            *self.pin_failures.write().await = (0, None);
+            return AuthOutcome::PinValid;
+        }
+
+        let mut lock = self.pin_failures.write().await;
+        lock.0 = lock.0.saturating_add(1);
+        if lock.0 >= MAX_PIN_FAILURES {
+            lock.1 = Some(Instant::now() + Duration::from_secs(PIN_LOCKOUT_SECS));
+            return AuthOutcome::RateLimited;
+        }
+        AuthOutcome::Unauthorized
+    }
+
+    pub async fn check_pin(&self, candidate: Option<&str>) -> bool {
+        matches!(
+            self.authorize_request(None, candidate).await,
+            AuthOutcome::AllowedNoPin | AuthOutcome::PinValid
+        )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn auth_sessions_lockout_and_client_bounds() {
+        let state = MobileRemoteSharedState::new();
+        assert!(state.pin_enabled.load(Ordering::Relaxed));
+        let pin = state.pin.read().await.clone();
+        assert_eq!(pin.len(), 6);
+
+        assert_eq!(
+            state.authorize_request(None, Some(&pin)).await,
+            AuthOutcome::PinValid
+        );
+        let cookie = state.issue_session_token().await;
+        assert_eq!(
+            state.authorize_request(Some(&cookie), None).await,
+            AuthOutcome::CookieValid
+        );
+
+        state.invalidate_sessions().await;
+        assert_eq!(
+            state.authorize_request(Some(&cookie), None).await,
+            AuthOutcome::Unauthorized
+        );
+
+        for _ in 0..4 {
+            assert_eq!(
+                state.authorize_request(None, Some("000000")).await,
+                AuthOutcome::Unauthorized
+            );
+        }
+        assert_eq!(
+            state.authorize_request(None, Some("000000")).await,
+            AuthOutcome::RateLimited
+        );
+        assert_eq!(
+            state.authorize_request(None, Some(&pin)).await,
+            AuthOutcome::RateLimited
+        );
+
+        for i in 0..160 {
+            state.touch_client(&format!("client-{i}")).await;
+        }
+        assert_eq!(state.client_count().await, MAX_CONNECTED_CLIENTS);
     }
 }

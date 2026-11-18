@@ -1,11 +1,12 @@
 <script module lang="ts">
-  import type { TrackListView } from "#lib/types/ui/library/track/TrackListView";
-  export type ActionMix = { icone: string; libelle: string; danger?: boolean; agir: (liste: TrackListView[]) => void };
+  export type { ActionMix } from "#lib/config/mixes";
 </script>
 
 <script lang="ts">
   // Carte d'un mix : quatre pochettes du tirage du jour, son nom, ses artistes ; un clic le lance.
   // Le tirage se fait à l'approche de l'écran : une page de cinquante mix n'en tire que ce qu'on voit.
+  import type { ActionMix } from "#lib/config/mixes";
+  import type { TrackListView } from "#lib/types/ui/library/track/TrackListView";
   import Icon from "@iconify/svelte";
   import { t } from "#lib/i18n";
   import CoverImg from "#lib/components/ui/image/CoverImg.svelte";

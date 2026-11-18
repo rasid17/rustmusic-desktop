@@ -18,7 +18,7 @@ function assetSrc(path: string): string {
 }
 
 function resolvedPathFor(path: string, size: CoverSize): string {
-    return path.replace(/[\/\\]full[\/\\]/, `/${size}/`);
+    return path.replace(/([\/\\])full[\/\\]/, (_, sep) => `${sep}${size}${sep}`);
 }
 
 // ── URL finale gardée en mémoire ──
@@ -190,4 +190,33 @@ export async function resolveCoverSrc(path: string | null | undefined, size: Cov
         pending.set(resolvedPath, promise);
     }
     return pending.get(resolvedPath)!;
+}
+
+/** Resolves a fallback cover path (album art, folder cover, remote URL) cleanly for players without an embedded image. */
+export function subscribeCoverFallback(
+    path: string | null | undefined,
+    size: CoverSize,
+    onChange: (url: string | null) => void,
+): (() => void) | undefined {
+    if (!path || path === "/images/no-cd.png") {
+        onChange(null);
+        return undefined;
+    }
+    const cached = coverSrcCached(path, size);
+    if (cached !== undefined) {
+        onChange(cached);
+        return undefined;
+    }
+    let alive = true;
+    onChange(null);
+    resolveCoverSrc(path, size)
+        .then((url) => {
+            if (alive) onChange(url);
+        })
+        .catch(() => {
+            if (alive) onChange(null);
+        });
+    return () => {
+        alive = false;
+    };
 }

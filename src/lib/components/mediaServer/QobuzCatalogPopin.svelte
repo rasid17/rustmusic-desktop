@@ -1,5 +1,6 @@
 <script lang="ts">
   import Icon from "@iconify/svelte";
+  import { t } from "#lib/i18n";
   import { serverStore } from "#lib/stores/mediaServer/mediaServer.store";
   import { toasts } from "#lib/stores/ui/toast.store";
   import { popinStore } from "#lib/stores/ui/popin.store";
@@ -61,7 +62,7 @@
       if (favorite) {
         toasts.push({
           type: "success",
-          title: "Added to Qobuz Favorites",
+          title: $t("streaming.track_fav_added_qobuz"),
           message: `${item.title} — ${item.artist}`,
         });
       }
@@ -83,7 +84,7 @@
       await serverStore.qobuzImportTrack(activeServerId, item.id, true);
       toasts.push({
         type: "success",
-        title: "Saved to Library & Qobuz Favorites",
+        title: $t("streaming.track_saved_qobuz"),
         message: `${item.title} — ${item.artist}`,
       });
     } catch (err) {
@@ -101,8 +102,11 @@
       const tracks = await serverStore.qobuzImportAlbum(activeServerId, album.id, favorite);
       toasts.push({
         type: "success",
-        title: favorite ? "Album added to Qobuz Favorites" : "Qobuz Album ready",
-        message: `${album.title} · ${tracks.length} tracks (${formatQuality(album.bit_depth, album.sampling_rate)})`,
+        title: $t(favorite ? "streaming.album_fav_added_qobuz" : "streaming.album_ready_qobuz"),
+        message: $t("streaming.album_summary")
+          .replace("{title}", album.title)
+          .replace("{n}", String(tracks.length))
+          .replace("{quality}", formatQuality(album.bit_depth, album.sampling_rate)),
       });
       if (playImmediately && tracks.length > 0 && tracks[0].path) {
         await handlePlayTrack(tracks[0].path, toQueue(tracks));
@@ -122,14 +126,14 @@
       <FormInput
         id="qobuz_catalog_search"
         bind:value={query}
-        placeholder="Search tracks, albums, or artists on Qobuz (Hi-Res 24-bit / 192 kHz)…"
+        placeholder={$t("streaming.qobuz_search_ph")}
         disabled={searching || !activeServerId}
         onenter={search}
       />
     </div>
     <GhostButton
       icon="material-symbols:search-rounded"
-      label="Search"
+      label={searching ? $t("streaming.searching") : $t("streaming.search")}
       busy={searching}
       disabled={searching || !query.trim() || !activeServerId}
       onclick={search}
@@ -138,7 +142,7 @@
 
   {#if qobuzServers.length > 1}
     <div class="flex items-center gap-2 text-xs text-(--rg-mu)">
-      <span>Qobuz Account:</span>
+      <span>{$t("streaming.qobuz_account")}</span>
       {#each qobuzServers as s (s.id)}
         <button
           type="button"
@@ -158,19 +162,19 @@
         onclick={() => (tab = "tracks")}
         class="px-3 py-1.5 rounded-xl text-xs font-semibold cursor-pointer transition-colors
                {tab === 'tracks' ? 'bg-(--rg-gbg) text-(--rg-gtx) border border-(--rg-gbd)' : 'text-(--rg-mu) hover:text-(--rg-tx)'}">
-        Tracks ({results.tracks.length})
+        {$t("streaming.tracks_tab")} ({results.tracks.length})
       </button>
       <button
         type="button"
         onclick={() => (tab = "albums")}
         class="px-3 py-1.5 rounded-xl text-xs font-semibold cursor-pointer transition-colors
                {tab === 'albums' ? 'bg-(--rg-gbg) text-(--rg-gtx) border border-(--rg-gbd)' : 'text-(--rg-mu) hover:text-(--rg-tx)'}">
-        Albums ({results.albums.length})
+        {$t("streaming.albums_tab")} ({results.albums.length})
       </button>
     </div>
     <span class="inline-flex items-center gap-1.5 text-[11px] font-medium text-amber-600 dark:text-amber-400">
       <Icon icon="material-symbols:high-quality-outline-rounded" width="15" />
-      Bit-Perfect FLAC · Symphonia Direct
+      {$t("streaming.qobuz_bit_perfect")}
     </span>
   </div>
 
@@ -185,7 +189,7 @@
     {#if searching}
       <div class="py-12 flex flex-col items-center justify-center gap-2 text-(--rg-mu)">
         <Icon icon="material-symbols:progress-activity" width="26" class="animate-spin text-(--rg-gtx)" />
-        <p class="text-sm">Searching Qobuz Hi-Res catalog…</p>
+        <p class="text-sm">{$t("streaming.qobuz_searching")}</p>
       </div>
     {:else if tab === "tracks"}
       {#each results.tracks as track (track.id)}
@@ -212,14 +216,14 @@
           <div class="flex items-center gap-1.5 shrink-0">
             <GhostButton
               icon="material-symbols:play-arrow-rounded"
-              label="Play"
+              label={$t("streaming.play")}
               busy={busyId === `track:${track.id}:play`}
               disabled={busyId !== null}
               onclick={() => playTrackNow(track, false)}
             />
             <GhostButton
               icon="material-symbols:favorite-outline-rounded"
-              label="Favorite"
+              label={$t("streaming.favorite")}
               busy={busyId === `track:${track.id}:fav`}
               disabled={busyId !== null}
               onclick={() => saveTrackOnly(track)}
@@ -228,7 +232,7 @@
         </div>
       {:else}
         <p class="py-10 text-center text-sm text-(--rg-mu)">
-          Enter a track, artist, or album name to explore the Qobuz Hi-Res catalog in studio quality.
+          {$t("streaming.qobuz_empty_tracks")}
         </p>
       {/each}
     {:else}
@@ -250,20 +254,20 @@
               </span>
             </div>
             <p class="text-xs truncate text-(--rg-mu)">
-              {[album.artist, album.year, `${album.tracks_count} tracks`, album.genre].filter(Boolean).join(" · ")}
+              {[album.artist, album.year, $t("streaming.tracks_unit").replace("{n}", String(album.tracks_count)), album.genre].filter(Boolean).join(" · ")}
             </p>
           </div>
           <div class="flex items-center gap-1.5 shrink-0">
             <GhostButton
               icon="material-symbols:play-arrow-rounded"
-              label="Play Album"
+              label={$t("streaming.play_album")}
               busy={busyId === `album:${album.id}:play`}
               disabled={busyId !== null}
               onclick={() => importAndPlayAlbum(album, true, false)}
             />
             <GhostButton
               icon="material-symbols:favorite-outline-rounded"
-              label="Favorite"
+              label={$t("streaming.favorite")}
               busy={busyId === `album:${album.id}:fav`}
               disabled={busyId !== null}
               onclick={() => importAndPlayAlbum(album, false, true)}
@@ -272,7 +276,7 @@
         </div>
       {:else}
         <p class="py-10 text-center text-sm text-(--rg-mu)">
-          No albums displayed yet. Run a search to browse Qobuz Hi-Res albums.
+          {$t("streaming.qobuz_empty_albums")}
         </p>
       {/each}
     {/if}

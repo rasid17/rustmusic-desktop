@@ -71,7 +71,9 @@ async function fetchFromBackend(libraryId: number) {
 function updateStoreAndCache(libraryId: number, albums: AlbumListView[], artists: ArtistListView[], n: number) {
     // 1. Stocker dans le cache mémoire
     //    Chaque type a sa propre clé pour pouvoir être invalidé indépendamment
-    dataCache.set(`albums:${libraryId}`, albums);
+    if (!get(libraryContentWritable).missingAlbumCover) {
+        dataCache.set(`albums:${libraryId}`, albums);
+    }
     dataCache.set(`artists:${libraryId}`, artists);
 
     // Une réponse dépassée (autre bibliothèque ouverte entre-temps) reste en cache sans s'afficher.
@@ -200,8 +202,13 @@ export const libraryContentStore = {
 
         try {
             const albums = await loadAlbums(libraryId as number, value);
-            dataCache.set(`albums:${libraryId}`, albums);
-            if (libraryId === courante) libraryContentWritable.update(s => ({ ...s, albums }));
+            if (!value) {
+                dataCache.set(`albums:${libraryId}`, albums);
+            }
+            const activeLibraryId = courante ?? get(libraryStore).librarySelected?.id;
+            if (libraryId === activeLibraryId && get(libraryContentWritable).missingAlbumCover === value) {
+                libraryContentWritable.update(s => ({ ...s, albums }));
+            }
         } catch (e) {
             console.error('Failed to reload albums with filter:', e);
         }
